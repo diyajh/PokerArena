@@ -524,11 +524,18 @@ async function handle(res){
   setActions(COACH);
   renderProfile(res.profile);
   if(STATE.hand_over) showCaption(res.commentary); else $$('.caption').forEach(x=>x.remove());
-  $('#btnNext').disabled = !STATE.hand_over || res.game_over;
+  const gameOver = res.game_over || STATE.game_over;
+  $('#btnNext').disabled = !STATE.hand_over || gameOver;
   $('#btnPeek').disabled = !PEEK;
+  $('#btnNew').disabled = !STATE.can_new_game;
+  $('#btnNew').textContent = STATE.can_resume ? '↩ Back to my game' : 'New game';
+  $('#btnNew').title = STATE.can_new_game ? '' : 'Your chips carry over. New game unlocks when you bust or knock out every bot.';
   busy=false;
   const human = STATE.players.find(p=>p.human);
-  if(STATE.hand_over && human && human.chips<=0) banner('💸 You busted! Hit New game.');
+  if(STATE.game_over && human){
+    if(human.chips<=0) banner('💸 You busted! Hit New game to start fresh at 1000.');
+    else { banner(`👑 You took every chip (${human.chips})! Hit New game to play again.`); confetti(200); }
+  }
   if(watching && STATE.hand_over && !res.game_over){ await sleep(1400); if(watching) next(); }
   if(res.game_over) watching=false, updateWatchBtn();
 }
