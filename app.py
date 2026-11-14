@@ -59,6 +59,18 @@ def new_game(bots, human=True, seed=None):
     return g
 
 
+def carried_chips(g):
+    """Chips each player walks away with (personality -> chips). Chips still in an
+    unfinished pot go back to whoever put them in. Busted players rebuy at 1000."""
+    if g is None:
+        return {}
+    out = {}
+    for p in g.players:
+        chips = p.chips + (0 if g.hand_over else p.contrib)
+        out[p.personality] = chips if chips > 0 else 1000
+    return out
+
+
 def play_over(g):
     """A play game ends only when you're broke or every bot is broke."""
     if g is None or not g.hand_over:
@@ -214,7 +226,10 @@ def api_new_game():
         return respond({"resumed": True})
     else:
         bots = body.get("bots") or ["risk_taker", "manipulator", "statistician"]
+        carry = carried_chips(PLAY_GAME)  # keep what you won or lost
         GAME = PLAY_GAME = new_game(bots[:5], human=True)
+        for p in GAME.players:
+            p.chips = carry.get(p.personality, 1000)
     apply_ndi(GAME)
     if MODE != "watch":
         GAME.tracker.load(0, load_profile())  # the bots remember you

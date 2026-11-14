@@ -604,9 +604,7 @@ async function newGame(restart){
 }
 $('#btnNew').onclick=()=>{
   if(STATE?.can_resume) return newGame(false);  // back to your game, chips intact
-  const midGame = STATE && STATE.players.some(p=>p.human) && !STATE.game_over;
-  if(midGame && !confirm('Start a new game? Everyone goes back to 1000 chips.')) return;
-  newGame(true);
+  newGame(true);  // fresh table, everyone keeps their chips (busted players rebuy 1000)
 };
 $('#btnDemo').onclick=async()=>{ if(busy) return; watching=false; updateWatchBtn(); await handle(await api('/api/demo_hand',{})); };
 function updateWatchBtn(){ $('#btnWatch').textContent = watching ? '⏸ Stop watching' : '👀 Watch bots'; }
