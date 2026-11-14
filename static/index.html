@@ -527,14 +527,16 @@ async function handle(res){
   const gameOver = res.game_over || STATE.game_over;
   $('#btnNext').disabled = !STATE.hand_over || gameOver;
   $('#btnPeek').disabled = !PEEK;
-  $('#btnNew').disabled = !STATE.can_new_game;
   $('#btnNew').textContent = STATE.can_resume ? '↩ Back to my game' : 'New game';
-  $('#btnNew').title = STATE.can_new_game ? '' : 'Your chips carry over. New game unlocks when you bust or knock out every bot.';
   busy=false;
   const human = STATE.players.find(p=>p.human);
   if(STATE.game_over && human){
-    if(human.chips<=0) banner('💸 You busted! Hit New game to start fresh at 1000.');
-    else { banner(`👑 You took every chip (${human.chips})! Hit New game to play again.`); confetti(200); }
+    const w = STATE.game_winner;
+    if(w===human.name){ banner(`👑 You won the game with ${human.chips} chips! New game starting…`); confetti(200); }
+    else banner(`💸 You busted! ${w} wins the game. New game starting…`);
+    log(`🏁 Game over: ${w} wins`,'st');
+    const g = STATE;
+    setTimeout(()=>{ if(STATE===g && !busy) newGame(true); }, 4000);
   }
   if(watching && STATE.hand_over && !res.game_over){ await sleep(1400); if(watching) next(); }
   if(res.game_over) watching=false, updateWatchBtn();
@@ -596,7 +598,16 @@ async function act(a){ if(busy) return; try{ setActions(null); await handle(awai
 $$('#actions button').forEach(b=>b.onclick=()=>act(b.dataset.a));
 async function next(){ if(busy) return; try{ await handle(await api('/api/next_hand',{})); }catch(e){ console.error(e); busy=false; } }
 $('#btnNext').onclick=next;
-$('#btnNew').onclick=async()=>{ if(busy) return; watching=false; updateWatchBtn(); await handle(await api('/api/new_game',{mode:'play',bots:chosen})); };
+async function newGame(restart){
+  if(busy) return; watching=false; updateWatchBtn();
+  await handle(await api('/api/new_game',{mode:'play',bots:chosen,restart:!!restart}));
+}
+$('#btnNew').onclick=()=>{
+  if(STATE?.can_resume) return newGame(false);  // back to your game, chips intact
+  const midGame = STATE && STATE.players.some(p=>p.human) && !STATE.game_over;
+  if(midGame && !confirm('Start a new game? Everyone goes back to 1000 chips.')) return;
+  newGame(true);
+};
 $('#btnDemo').onclick=async()=>{ if(busy) return; watching=false; updateWatchBtn(); await handle(await api('/api/demo_hand',{})); };
 function updateWatchBtn(){ $('#btnWatch').textContent = watching ? '⏸ Stop watching' : '👀 Watch bots'; }
 $('#btnWatch').onclick=async()=>{
