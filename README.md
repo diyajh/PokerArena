@@ -33,3 +33,14 @@ Without a key a local fallback brain is used and the UI says so.
 `DREX_API_KEY` (required), `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` (LLM column), `NDI_API_KEY` (hand-history upload). See `.env.example`.
 
 Keys: F fold · C check/call · H half-pot · P pot · A all-in · N next hand · B brain-peek
+
+## 🤖 Work on this repo with Nace Intern
+This repo is **Intern-ready**: [nace-ai/intern](https://github.com/nace-ai/intern) is Nace's open-source coding agent with a two-part brain, where Drex (System 1) watches every turn of a worker model (System 2). `AGENTS.md` gives it this project's rules.
+```bash
+uv tool install "intern-agent @ git+https://github.com/nace-ai/intern"
+export NACE_API_KEY=...          # same nace_sk_ key: Drex as System 1
+export OPENROUTER_API_KEY=...    # or any provider for System 2
+cd PokerArena
+intern --system2 openrouter/qwen/qwen3.8-27b "Add a new personality called 'Copycat' that mirrors the last opponent's action"
+```
+So Drex both **plays the game** (every bot move) and **supervises the agent that builds the game**.
