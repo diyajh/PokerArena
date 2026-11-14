@@ -96,8 +96,16 @@ def serialize(g):
         "game_over": play_over(g) if g is PLAY_GAME else False,
         # your real game is still running but you're looking at another table (watch / demo)
         "can_resume": g is not PLAY_GAME and play_in_progress(),
-        "can_new_game": g is not PLAY_GAME or not play_in_progress(),
+        "game_winner": game_winner(g) if g is PLAY_GAME and play_over(g) else None,
     }
+
+
+def game_winner(g):
+    """You if every bot is broke, otherwise the bot holding the most chips."""
+    human = next((p for p in g.players if p.human), None)
+    if human and human.chips > 0:
+        return human.name
+    return max((p for p in g.players if not p.human), key=lambda p: p.chips).name
 
 
 
@@ -200,7 +208,7 @@ def api_new_game():
     if MODE == "watch":
         bots = body.get("bots") or ["risk_taker", "conservative", "statistician", "manipulator", "wildcard"]
         GAME = new_game(bots, human=False)
-    elif play_in_progress():
+    elif play_in_progress() and not body.get("restart"):
         # your game isn't finished: go back to it with your chips instead of resetting to 1000
         GAME = PLAY_GAME
         return respond({"resumed": True})
