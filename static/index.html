@@ -524,11 +524,20 @@ async function handle(res){
   setActions(COACH);
   renderProfile(res.profile);
   if(STATE.hand_over) showCaption(res.commentary); else $$('.caption').forEach(x=>x.remove());
-  $('#btnNext').disabled = !STATE.hand_over || res.game_over;
+  const gameOver = res.game_over || STATE.game_over;
+  $('#btnNext').disabled = !STATE.hand_over || gameOver;
   $('#btnPeek').disabled = !PEEK;
+  $('#btnNew').textContent = STATE.can_resume ? '↩ Back to my game' : 'New game';
   busy=false;
   const human = STATE.players.find(p=>p.human);
-  if(STATE.hand_over && human && human.chips<=0) banner('💸 You busted! Hit New game.');
+  if(STATE.game_over && human){
+    const w = STATE.game_winner;
+    if(w===human.name){ banner(`👑 You won the game with ${human.chips} chips! New game starting…`); confetti(200); }
+    else banner(`💸 You busted! ${w} wins the game. New game starting…`);
+    log(`🏁 Game over: ${w} wins`,'st');
+    const g = STATE;
+    setTimeout(()=>{ if(STATE===g && !busy) newGame(true); }, 4000);
+  }
   if(watching && STATE.hand_over && !res.game_over){ await sleep(1400); if(watching) next(); }
   if(res.game_over) watching=false, updateWatchBtn();
 }
@@ -589,7 +598,14 @@ async function act(a){ if(busy) return; try{ setActions(null); await handle(awai
 $$('#actions button').forEach(b=>b.onclick=()=>act(b.dataset.a));
 async function next(){ if(busy) return; try{ await handle(await api('/api/next_hand',{})); }catch(e){ console.error(e); busy=false; } }
 $('#btnNext').onclick=next;
-$('#btnNew').onclick=async()=>{ if(busy) return; watching=false; updateWatchBtn(); await handle(await api('/api/new_game',{mode:'play',bots:chosen})); };
+async function newGame(restart){
+  if(busy) return; watching=false; updateWatchBtn();
+  await handle(await api('/api/new_game',{mode:'play',bots:chosen,restart:!!restart}));
+}
+$('#btnNew').onclick=()=>{
+  if(STATE?.can_resume) return newGame(false);  // back to your game, chips intact
+  newGame(true);  // fresh table, everyone keeps their chips (busted players rebuy 1000)
+};
 $('#btnDemo').onclick=async()=>{ if(busy) return; watching=false; updateWatchBtn(); await handle(await api('/api/demo_hand',{})); };
 function updateWatchBtn(){ $('#btnWatch').textContent = watching ? '⏸ Stop watching' : '👀 Watch bots'; }
 $('#btnWatch').onclick=async()=>{
