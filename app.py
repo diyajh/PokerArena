@@ -33,6 +33,7 @@ app = Flask(__name__, static_folder="static", static_url_path="/static")
 
 BRAIN = Brain()
 GAME = None
+PLAY_GAME = None  # your real game: chips carry over hand to hand until you bust or win it all
 MODE = "play"
 NDI_STATS = {}  # name -> stats pulled from an uploaded hand history
 
@@ -58,6 +59,20 @@ def new_game(bots, human=True, seed=None):
     return g
 
 
+def play_over(g):
+    """A play game ends only when you're broke or every bot is broke."""
+    if g is None or not g.hand_over:
+        return False
+    humans = [p for p in g.players if p.human]
+    if not humans:
+        return True
+    return humans[0].chips <= 0 or all(p.chips <= 0 for p in g.players if not p.human)
+
+
+def play_in_progress():
+    return PLAY_GAME is not None and not play_over(PLAY_GAME)
+
+
 def serialize(g):
     over = g.hand_over
     shown = (g.result or {}).get("hands", {}) if over else {}
@@ -78,6 +93,10 @@ def serialize(g):
         "pot": g.pot if not over else 0, "to_act": g.to_act if not over else None,
         "dealer": g.dealer, "hand_over": over, "result": g.result, "players": players,
         "drex_live": drex_configured(),
+        "game_over": play_over(g) if g is PLAY_GAME else False,
+        # your real game is still running but you're looking at another table (watch / demo)
+        "can_resume": g is not PLAY_GAME and play_in_progress(),
+        "can_new_game": g is not PLAY_GAME or not play_in_progress(),
     }
 
 
@@ -175,15 +194,19 @@ def personalities():
 
 @app.post("/api/new_game")
 def api_new_game():
-    global GAME, MODE
+    global GAME, PLAY_GAME, MODE
     body = request.get_json(silent=True) or {}
     MODE = body.get("mode", "play")
     if MODE == "watch":
         bots = body.get("bots") or ["risk_taker", "conservative", "statistician", "manipulator", "wildcard"]
         GAME = new_game(bots, human=False)
+    elif play_in_progress():
+        # your game isn't finished: go back to it with your chips instead of resetting to 1000
+        GAME = PLAY_GAME
+        return respond({"resumed": True})
     else:
         bots = body.get("bots") or ["risk_taker", "manipulator", "statistician"]
-        GAME = new_game(bots[:5], human=True)
+        GAME = PLAY_GAME = new_game(bots[:5], human=True)
     apply_ndi(GAME)
     if MODE != "watch":
         GAME.tracker.load(0, load_profile())  # the bots remember you
@@ -209,6 +232,8 @@ def api_next_hand():
         return jsonify({"error": "no game"}), 400
     if not GAME.hand_over:
         return respond()
+    if GAME is PLAY_GAME and play_over(GAME):
+        return respond({"game_over": True})
     if not GAME.start_hand():
         return respond({"game_over": True})
     GAME.run_bots()
