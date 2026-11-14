@@ -22,6 +22,7 @@ if os.path.exists(_env):
             if _v:  # skip blank values so defaults still apply
                 os.environ.setdefault(_k.strip(), _v)
 
+from brain import commentate  # noqa: E402
 from brain import (DREX_COST_PER_CALL, DREX_PRICE_PER_M_INPUT, LLM_MODEL, LLM_PRICE_IN, LLM_PRICE_OUT,
                    PERSONALITIES, Brain, drex_configured, llm_configured,
                    win_chance)
@@ -80,6 +81,59 @@ def serialize(g):
     }
 
 
+
+# ---------------- 🧠 the bots remember you ----------------
+PROFILE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "you_profile.json")
+
+
+def load_profile():
+    try:
+        return json.load(open(PROFILE_FILE))
+    except Exception:
+        return {"hands": 0, "actions": 0, "raises": 0, "folds": 0, "showdowns": 0, "bluffs": 0, "recent": []}
+
+
+def human_summary(g):
+    hs = [p for p in g.players if p.human]
+    if not hs:
+        return None
+    d = g.tracker.export(hs[0].seat)
+    acts = d["actions"] or 0
+    prof = load_profile()
+    return {"hands": prof.get("hands", 0), "actions": acts, "raises": d["raises"], "folds": d["folds"],
+            "raise_rate": d["raises"] / acts if acts else 0, "fold_rate": d["folds"] / acts if acts else 0,
+            "showdowns": d["showdowns"], "bluffs": d["bluffs"], "recent": d["recent"],
+            "style": prof.get("style")}
+
+
+def save_profile(g, style=None):
+    hs = [p for p in g.players if p.human]
+    if not hs or hs[0].out:
+        return
+    d = g.tracker.export(hs[0].seat)
+    prof = load_profile()
+    d["hands"] = prof.get("hands", 0) + 1
+    d["style"] = style or prof.get("style")
+    try:
+        json.dump(d, open(PROFILE_FILE, "w"))
+    except Exception:
+        pass
+
+
+def after_hand(g):
+    """Once per finished hand: Drex commentary + update your saved profile."""
+    if getattr(g, "_done_hand", None) == g.hand_no:
+        return
+    g._done_hand = g.hand_no
+    hum = human_summary(g)
+    try:
+        g.commentary = commentate(g.decisions, g.result, hum)
+    except Exception:
+        g.commentary = None
+    style = (g.commentary or {}).get("human_style")
+    save_profile(g, style)
+
+
 def respond(extra=None):
     g = GAME
     out = {"state": serialize(g), "events": g.pop_events()}
@@ -87,10 +141,14 @@ def respond(extra=None):
         p = g.players[g.to_act]
         out["coach"] = BRAIN.coach(g, p)
     if g.hand_over:
+        after_hand(g)
+        out["commentary"] = getattr(g, "commentary", None)
         out["peek"] = {
             "decisions": g.decisions,
             "holes": {p.name: cards_str(p.hole) for p in g.players if p.hole},
         }
+    if any(p.human for p in g.players):
+        out["profile"] = human_summary(g)
     if extra:
         out.update(extra)
     return jsonify(out)
@@ -127,9 +185,22 @@ def api_new_game():
         bots = body.get("bots") or ["risk_taker", "manipulator", "statistician"]
         GAME = new_game(bots[:5], human=True)
     apply_ndi(GAME)
+    if MODE != "watch":
+        GAME.tracker.load(0, load_profile())  # the bots remember you
     GAME.start_hand()
     GAME.run_bots()
     return respond()
+
+
+@app.post("/api/reset_profile")
+def api_reset_profile():
+    try:
+        os.remove(PROFILE_FILE)
+    except Exception:
+        pass
+    if GAME is not None and any(p.human for p in GAME.players):
+        GAME.tracker.load(0, load_profile())
+    return jsonify({"ok": True})
 
 
 @app.post("/api/next_hand")
@@ -156,10 +227,12 @@ def api_action():
         return jsonify({"error": "not your turn"}), 400
     if action not in g.legal(p):
         return jsonify({"error": f"illegal action {action}"}), 400
+    eq = win_chance(p.hole, g.board, len(g.in_hand()) - 1, runs=150, rng=g.rng)
     if action in RAISE_ACTIONS:  # remember your equity so bots can catch YOUR bluffs
-        opps = len(g.in_hand()) - 1
-        g.raised_equities.setdefault(p.seat, []).append(
-            win_chance(p.hole, g.board, opps, runs=150, rng=g.rng))
+        g.raised_equities.setdefault(p.seat, []).append(eq)
+    g.decisions.append({"seat": p.seat, "name": "You", "personality": "human", "street": g.street,
+                        "choice": action, "to_call": g.to_call(p), "equity": eq, "hole": cards_str(p.hole),
+                        "probs": None, "source": "human", "ms": 0, "why": "Your move", "evidence": []})
     g.apply(p, action)
     g.run_bots()
     return respond()
@@ -196,7 +269,14 @@ def api_demo_hand():
 def _run_table(bots, hands, mc_runs):
     """One table playing `hands` hands. Busted bots rebuy 1000 (counted as -1000)."""
     brain = Brain(mc_runs=mc_runs)
-    players = [make_player(i, b, brain=brain_for(b)) for i, b in enumerate(bots)]
+    players = []
+    for i, b in enumerate(bots):
+        if isinstance(b, dict):  # evolution agent: {personality, name, genes}
+            p = make_player(i, b["personality"], brain=brain_for(b["personality"]))
+            p.name, p.genes = b["name"], b["genes"]
+        else:
+            p = make_player(i, b, brain=brain_for(b))
+        players.append(p)
     for i, p in enumerate(players):  # unique names if duplicate personalities
         dup = sum(1 for q in players[:i] if q.name == p.name)
         if dup:
@@ -254,7 +334,7 @@ def run_sim(bots, hands, mc_runs=120, tables=None):
         st = per[i]
         rows.append({
             "name": p.name, "personality": p.personality,
-            "emoji": PERSONALITIES[p.personality]["emoji"], "brain": p.brain,
+            "emoji": PERSONALITIES[p.personality]["emoji"], "brain": p.brain, "seat": i,
             "net": net[i], "rebuys": reb[i], "hands_won": win[i],
             "win_rate": win[i] / hands if hands else 0,
             "decisions": st["decisions"],
@@ -277,7 +357,7 @@ def save_result(kind, payload):
 @app.get("/api/last_results")
 def api_last_results():
     out = {}
-    for kind in ("arena", "benchmark"):
+    for kind in ("arena", "benchmark", "evolution"):
         fp = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"last_{kind}.json")
         if os.path.exists(fp):
             try:
@@ -341,6 +421,86 @@ def api_benchmark():
         out["llm"]["source"] = "ANTHROPIC_API_KEY" if os.getenv("ANTHROPIC_API_KEY") else "OPENAI_API_KEY"
     return jsonify(save_result("benchmark", {"benchmark": out, "hands": hands, "seconds": round(secs, 2),
                                              "drex_live": drex_configured(), "llm_live": with_llm, "table": rows}))
+
+
+# ---------------- 🧬 Evolution Mode ----------------
+from brain import DEFAULT_GENES, GENE_RANGES  # noqa: E402
+
+GENE_LABEL = {"aggression": "aggression", "caution": "caution", "raise_boost": "raise boost",
+              "raise_threshold": "raise bar", "temperature": "chaos temp", "bluff_threshold": "bluff trigger"}
+RELEVANT = {"risk_taker": ["raise_boost", "aggression", "caution"],
+            "conservative": ["raise_threshold", "aggression", "caution"],
+            "statistician": ["aggression", "caution"],
+            "manipulator": ["bluff_threshold", "aggression", "caution"],
+            "wildcard": ["temperature", "aggression", "caution"]}
+
+
+def mutate(genes, rng, strength=0.3):
+    child, changes = dict(genes), []
+    for k, (lo, hi) in GENE_RANGES.items():
+        if rng.random() < 0.6:
+            old = child[k]
+            new = min(hi, max(lo, old * rng.uniform(1 - strength, 1 + strength)))
+            child[k] = round(new, 3)
+            if abs(new - old) / max(old, 1e-6) > 0.05:
+                changes.append({"gene": k, "label": GENE_LABEL[k], "from": round(old, 2), "to": round(new, 2)})
+    return child, changes
+
+
+@app.post("/api/evolve")
+def api_evolve():
+    """Natural selection on Drex agents: each generation plays, the worst goes extinct,
+    the best spawns a mutated child. Every move in every generation is a Drex call."""
+    body = request.get_json(silent=True) or {}
+    gens = max(2, min(int(body.get("generations", 6)), 15))
+    hands = max(2, min(int(body.get("hands_per_gen", 8)), 60))
+    rng = random.Random()
+    pop = []
+    for i, pers in enumerate(["risk_taker", "conservative", "statistician", "manipulator", "wildcard"]):
+        pop.append({"id": f"{pers}-1", "personality": pers, "name": f"{PERSONALITIES[pers]['name']} G1",
+                    "genes": dict(DEFAULT_GENES), "parent": None, "born": 1, "lineage": pers})
+    history, graveyard = [], []
+    t0 = time.perf_counter()
+    for gen in range(1, gens + 1):
+        rows, stats, secs = run_sim(pop, hands)
+        by_name = {r["name"]: r for r in rows}
+        ranked = sorted(pop, key=lambda ag: by_name[ag["name"]]["net"], reverse=True)
+        snap = [{"id": ag["id"], "name": ag["name"], "personality": ag["personality"], "lineage": ag["lineage"],
+                 "emoji": PERSONALITIES[ag["personality"]]["emoji"], "net": by_name[ag["name"]]["net"],
+                 "hands_won": by_name[ag["name"]]["hands_won"], "born": ag["born"],
+                 "genes": {k: round(ag["genes"][k], 2) for k in RELEVANT[ag["personality"]]}} for ag in ranked]
+        entry = {"gen": gen, "ranking": snap, "seconds": round(secs, 1),
+                 "drex_calls": stats.get("drex", {}).get("drex_calls", 0)}
+        if gen < gens:
+            loser, winner = ranked[-1], ranked[0]
+            child_genes, changes = mutate(winner["genes"], rng)
+            changes = [c for c in changes if c["gene"] in RELEVANT[winner["personality"]]]
+            n_same = sum(1 for ag in pop if ag["lineage"] == winner["lineage"]) + \
+                sum(1 for g in graveyard if g["lineage"] == winner["lineage"])
+            child = {"id": f"{winner['lineage']}-{gen + 1}-{n_same + 1}", "personality": winner["personality"],
+                     "name": f"{PERSONALITIES[winner['personality']]['name']} G{gen + 1}"
+                             + ("" if n_same < 2 else chr(ord('a') + n_same - 1)),
+                     "genes": child_genes, "parent": winner["id"], "born": gen + 1, "lineage": winner["lineage"]}
+            names = {ag["name"] for ag in pop}
+            while child["name"] in names:
+                child["name"] += "'"
+            pop = [ag for ag in pop if ag is not loser] + [child]
+            graveyard.append(loser)
+            entry["extinct"] = {"name": loser["name"], "emoji": PERSONALITIES[loser["personality"]]["emoji"],
+                                "net": by_name[loser["name"]]["net"]}
+            entry["born"] = {"name": child["name"], "parent": winner["name"],
+                             "emoji": PERSONALITIES[child["personality"]]["emoji"], "mutations": changes}
+        history.append(entry)
+    # survivors by lineage
+    census = {}
+    for ag in pop:
+        census[ag["lineage"]] = census.get(ag["lineage"], 0) + 1
+    dominant = max(census, key=census.get)
+    result = {"generations": history, "hands_per_gen": hands, "census": census,
+              "dominant": {"lineage": dominant, "name": PERSONALITIES[dominant]["name"],
+                           "emoji": PERSONALITIES[dominant]["emoji"], "count": census[dominant]},
+              "seconds": round(time.perf_counter() - t0, 1), "drex_live": drex_configured()}
+    return jsonify(save_result("evolution", result))
 
 
 # ---------------- NDI hand-history upload (bonus) ----------------

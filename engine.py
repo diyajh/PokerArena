@@ -119,6 +119,20 @@ class Tracker:
             "bluffs": self.bluffs[seat],
         }
 
+    def export(self, seat):
+        self._init(seat)
+        return {"recent": list(self.recent[seat]), "actions": self.actions[seat], "raises": self.raises[seat],
+                "folds": self.folds.get(seat, 0), "showdowns": self.showdowns[seat], "bluffs": self.bluffs[seat]}
+
+    def load(self, seat, d):
+        self._init(seat)
+        self.recent[seat] = deque(d.get("recent", []), maxlen=6)
+        self.actions[seat] = d.get("actions", 0)
+        self.raises[seat] = d.get("raises", 0)
+        self.folds[seat] = d.get("folds", 0)
+        self.showdowns[seat] = d.get("showdowns", 0)
+        self.bluffs[seat] = d.get("bluffs", 0)
+
     def seed(self, seat, recent, showdowns, bluffs):
         self._init(seat)
         self.recent[seat] = deque(recent, maxlen=6)

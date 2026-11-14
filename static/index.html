@@ -143,6 +143,32 @@ table.lb tr:first-child td{color:var(--gold);font-weight:700}
 input[type=number]{background:#0d131a;border:1px solid var(--line);color:var(--text);padding:7px 9px;border-radius:8px;width:90px;font:inherit}
 .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 pre.ndi{font-size:11px;background:#0d131a;padding:8px;border-radius:8px;max-height:140px;overflow:auto;margin-top:8px}
+
+/* ---------- EVOLUTION ---------- */
+.evo{display:flex;flex-direction:column;gap:10px}
+.gen{display:grid;grid-template-columns:70px 1fr 300px;gap:12px;align-items:center;background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:10px 12px;animation:pop2 .35s ease}
+.gen .gnum{font-weight:900;font-size:20px;color:var(--gold)}
+.gen .agents{display:flex;gap:8px;flex-wrap:wrap}
+.agent{border:1px solid var(--line);border-radius:10px;padding:6px 9px;font-size:12px;min-width:120px;background:#0f151c;position:relative}
+.agent .an{font-weight:800;font-size:13px}
+.agent .gn{color:var(--muted);font-size:11px}
+.agent.top{border-color:var(--green);box-shadow:0 0 0 1px var(--green)}
+.agent.dead{border-color:var(--red);opacity:.6;text-decoration:line-through}
+.agent.newborn{border-style:dashed;border-color:var(--gold)}
+.agent .badge2{position:absolute;top:-9px;right:-6px;font-size:16px}
+.gen .events{font-size:12px;line-height:1.5}
+.gen .events .ex{color:var(--red)}
+.gen .events .bo{color:var(--gold)}
+.lin-risk_taker{border-left:4px solid #ff7a45}.lin-conservative{border-left:4px solid #8a9aab}.lin-statistician{border-left:4px solid #4da3ff}.lin-manipulator{border-left:4px solid #b57bff}.lin-wildcard{border-left:4px solid #3ddc97}
+.dombar{display:flex;height:22px;border-radius:8px;overflow:hidden;margin:6px 0 12px}
+.dombar div{display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#0b0f14}
+
+.caption{position:absolute;left:50%;bottom:6px;transform:translateX(-50%);background:linear-gradient(90deg,#c0392b,#e67e22);color:#fff;border-radius:10px;padding:7px 14px;font-weight:800;z-index:12;white-space:nowrap;box-shadow:0 8px 24px rgba(0,0,0,.5);animation:slideup .45s cubic-bezier(.2,.8,.3,1)}
+.caption small{font-weight:600;opacity:.85;margin-left:8px}
+.caption .mic{background:#fff;color:#c0392b;border-radius:6px;padding:1px 6px;margin-right:8px;font-size:11px;letter-spacing:1px}
+@keyframes slideup{from{transform:translate(-50%,30px);opacity:0}}
+.pstat{display:flex;justify-content:space-between;font-size:12px;padding:3px 0}
+.pstyle{font-size:16px;font-weight:800;color:var(--gold);margin-bottom:6px}
 @media (max-width:1100px){.play,.arena{grid-template-columns:1fr}}
 </style>
 </head>
@@ -152,6 +178,7 @@ pre.ndi{font-size:11px;background:#0d131a;padding:8px;border-radius:8px;max-heig
   <div class="tabs">
     <div class="tab active" data-tab="play">🎮 Play</div>
     <div class="tab" data-tab="arena">🏟️ Arena</div>
+    <div class="tab" data-tab="evo">🧬 Evolution</div>
   </div>
   <div id="drexBadge" class="badge">Drex: …</div>
 </header>
@@ -194,6 +221,10 @@ pre.ndi{font-size:11px;background:#0d131a;padding:8px;border-radius:8px;max-heig
         <h3>💡 Coach: what Drex would do <span class="muted" id="coachMeta"></span></h3>
         <div id="coach"><div class="muted">Bars appear on your turn.</div></div>
       </div>
+      <div class="panel" id="profilePanel">
+        <h3>🧠 Drex's read on you <button class="ghost" id="btnResetProfile" style="padding:2px 8px;font-size:11px">reset</button></h3>
+        <div id="profile" class="muted">Play a few hands. The bots remember you across games.</div>
+      </div>
       <div class="panel">
         <h3>Hand log <span class="muted" id="handNo"></span></h3>
         <div class="log" id="log"></div>
@@ -233,6 +264,24 @@ pre.ndi{font-size:11px;background:#0d131a;padding:8px;border-radius:8px;max-heig
       <div class="row" style="margin-top:8px"><input type="file" id="ndiFile" accept=".txt,.log,.csv"><button id="btnNdi">Upload</button></div>
       <pre class="ndi" id="ndiOut" style="display:none"></pre>
     </div>
+  </div>
+</section>
+
+
+<!-- ================= EVOLUTION ================= -->
+<section class="page" id="page-evo">
+  <div class="panel">
+    <h3>🧬 Evolution Mode: natural selection for Drex agents</h3>
+    <div class="muted" style="margin-bottom:10px">Each generation, the 5 agents play (every move is a live Drex call). The worst agent goes <b>extinct 💀</b>; the best spawns a <b>mutated child 🐣</b> with tweaked genes (how it uses Drex's probabilities). Watch which strategy takes over.</div>
+    <div class="row" style="margin-bottom:12px">
+      <span class="muted">Generations</span><input type="number" id="evoGens" value="6" min="2" max="15">
+      <span class="muted">Hands / gen</span><input type="number" id="evoHands" value="8" min="2" max="60">
+      <button class="primary" id="btnEvo">Run evolution</button>
+      <button id="btnEvoReplay" disabled>▶ Replay</button>
+      <span id="evoStatus" class="muted"></span>
+    </div>
+    <div id="evoDominant"></div>
+    <div id="evoTimeline" class="evo"></div>
   </div>
 </section>
 
@@ -473,6 +522,8 @@ async function handle(res){
   }
   renderCoach();
   setActions(COACH);
+  renderProfile(res.profile);
+  if(STATE.hand_over) showCaption(res.commentary); else $$('.caption').forEach(x=>x.remove());
   $('#btnNext').disabled = !STATE.hand_over || res.game_over;
   $('#btnPeek').disabled = !PEEK;
   busy=false;
@@ -514,11 +565,11 @@ function openPeek(){
     const star = ['raise_half_pot','raise_pot','all_in'].includes(d.choice) && d.equity<0.35;
     const bars = d.probs ? Object.entries(d.probs).map(([a,v])=>`
       <div class="bar ${a===d.choice?'top':''}"><div class="lbl">${ALABEL[a]}</div><div class="track"><div class="fill" style="width:${(v*100).toFixed(1)}%"></div></div><div class="pct">${(v*100).toFixed(0)}%</div></div>`).join('')
-      : `<div class="muted">${d.source==='llm'?'LLM: one text answer, no probabilities':'Rule-based: no probabilities'}</div>`;
+      : `<div class="muted">${d.source==='llm'?'LLM: one text answer, no probabilities':d.source==='human'?'Your decision':'Rule-based: no probabilities'}</div>`;
     return `<div class="dcard ${star?'star':''}">
       <div class="dhead">${(PERS[d.personality]||{}).emoji||''} <span class="nm">${d.name}</span>
         <span class="tag">${d.street}</span><span class="tag ${d.source}">${d.source}</span>
-        <span class="tag">⏱ ${d.ms<1?d.ms.toFixed(2):d.ms.toFixed(0)}ms</span></div>
+        ${d.source==='human'?'':`<span class="tag">⏱ ${d.ms<1?d.ms.toFixed(2):d.ms.toFixed(0)}ms</span>`}</div>
       <div class="row" style="margin-bottom:6px">${d.hole.map(c=>cardHTML(c,'sm')).join('')}<span class="muted">win chance <b>${(d.equity*100).toFixed(0)}%</b></span></div>
       ${bars}
       <div class="choice">→ ${ALABEL[d.choice]} ${star?'🃏 BLUFF':''}</div>
@@ -627,6 +678,69 @@ $('#btnNdi').onclick=async()=>{
   $('#ndiOut').textContent = `Source: ${r.source}${r.job_id?' · job '+r.job_id:''} · ${r.seconds}s${r.error?'\nNDI error, used local parser: '+r.error:''}\n\n`
     + (rows.length? rows.join('\n') + '\n\n→ Seeded into every bot\'s opponent history. The Manipulator\'s Drex questions now use it.' : 'No player actions found.');
 };
+
+
+
+// ---------- commentator + profile ----------
+function showCaption(c){
+  $$('.caption').forEach(x=>x.remove());
+  if(!c) return;
+  const d=document.createElement('div'); d.className='caption';
+  const st=c.street?c.street:''; const conf=c.confidence?` · ${(c.confidence*100).toFixed(0)}% sure`:'';
+  d.innerHTML=`<span class="mic">🎙️ ${c.source==='drex'?'DREX':'EST.'}</span>${c.emoji} ${c.label} by ${c.who}! <small>${st}, ${(c.equity*100).toFixed(0)}% to win${conf}</small>`;
+  $('#tablewrap').appendChild(d);
+  log(`🎙️ ${c.source==='drex'?'Drex':'Est.'} commentator: ${c.emoji} <b>${c.label}</b> by ${c.who} (${st}, ${(c.equity*100).toFixed(0)}% to win)`,'st');
+}
+function renderProfile(p){
+  if(!p){ $('#profilePanel').style.display='none'; return; }
+  $('#profilePanel').style.display='';
+  if(!p.actions){ $('#profile').innerHTML='<div class="muted">Play a few hands. The bots remember you across games.</div>'; return; }
+  const s=p.style;
+  $('#profile').innerHTML = `${s?`<div class="pstyle">${s.label}${s.p?` <span class="muted">(${(s.p*100).toFixed(0)}%)</span>`:''}</div>`:''}
+    <div class="pstat"><span>Hands remembered</span><b>${p.hands}</b></div>
+    <div class="pstat"><span>Raise rate</span><b>${(p.raise_rate*100).toFixed(0)}%</b></div>
+    <div class="pstat"><span>Fold rate</span><b>${(p.fold_rate*100).toFixed(0)}%</b></div>
+    <div class="pstat"><span>Bluffs caught</span><b>${p.bluffs}/${p.showdowns}</b></div>
+    <div class="muted" style="margin-top:6px">Every bot's Drex state includes this. The Manipulator exploits it.</div>`;
+}
+$('#btnResetProfile').onclick=async()=>{ await api('/api/reset_profile',{}); renderProfile({actions:0}); };
+
+// ---------- evolution ----------
+let EVO=null;
+const LIN_COLOR={risk_taker:'#ff7a45',conservative:'#8a9aab',statistician:'#4da3ff',manipulator:'#b57bff',wildcard:'#3ddc97'};
+async function renderEvo(r, animate=true){
+  EVO=r; $('#btnEvoReplay').disabled=false;
+  $('#evoTimeline').innerHTML=''; $('#evoDominant').innerHTML='';
+  for(const g of r.generations){
+    const born = g.born ? g.born.name : null;
+    const prevBorn = r.generations[g.gen-2]?.born?.name;
+    const div=document.createElement('div'); div.className='gen';
+    div.innerHTML = `<div class="gnum">Gen ${g.gen}</div>
+      <div class="agents">${g.ranking.map((a,i)=>`<div class="agent lin-${a.lineage} ${i===0?'top':''} ${g.extinct&&g.extinct.name===a.name?'dead':''} ${a.name===prevBorn?'newborn':''}">
+        ${i===0?'<span class="badge2">👑</span>':''}${g.extinct&&g.extinct.name===a.name?'<span class="badge2">💀</span>':''}${a.name===prevBorn?'<span class="badge2">🐣</span>':''}
+        <div class="an">${a.emoji} ${a.name}</div>
+        <div class="${a.net>=0?'pos':'neg'}">${a.net>=0?'+':''}${a.net} chips</div>
+        <div class="gn">${Object.entries(a.genes).map(([k,v])=>`${k.replace('_',' ')} ${v}`).join(' · ')}</div></div>`).join('')}</div>
+      <div class="events">${g.extinct?`<div class="ex">💀 <b>${g.extinct.name}</b> went extinct (${g.extinct.net} chips)</div>`:'<div class="muted">Final generation</div>'}
+        ${g.born?`<div class="bo">🐣 <b>${g.born.name}</b> born from ${g.born.parent}${g.born.mutations.length?': '+g.born.mutations.map(m=>`${m.label} ${m.from}→${m.to}`).join(', '):''}</div>`:''}
+        <div class="muted">${g.drex_calls} Drex calls · ${g.seconds}s</div></div>`;
+    $('#evoTimeline').appendChild(div);
+    if(animate) await sleep(900);
+  }
+  const tot=Object.values(r.census).reduce((a,b)=>a+b,0);
+  $('#evoDominant').innerHTML = `<div style="font-size:18px;font-weight:800">🏆 Survival of the fittest: <span style="color:var(--gold)">${r.dominant.emoji} ${r.dominant.name}</span> lineage holds ${r.dominant.count}/${tot} of the final population</div>
+    <div class="dombar">${Object.entries(r.census).map(([k,v])=>`<div style="width:${v/tot*100}%;background:${LIN_COLOR[k]}">${PERS[k].emoji} ${v}</div>`).join('')}</div>`;
+  if(animate) confetti(60);
+  $('#evoStatus').textContent = `${r.generations.length} generations × ${r.hands_per_gen} hands in ${r.seconds}s · ${r.drex_live?'Drex LIVE':'local fallback'}${r.saved_at?' · run at '+r.saved_at:''}`;
+}
+$('#btnEvo').onclick=async()=>{
+  $('#btnEvo').disabled=true; $('#evoStatus').innerHTML='<span class="spinner"></span> evolving… (every move is a Drex call)';
+  try{ await renderEvo(await api('/api/evolve',{generations:+$('#evoGens').value, hands_per_gen:+$('#evoHands').value})); }
+  catch(e){ $('#evoStatus').textContent='Error: '+e.message; }
+  $('#btnEvo').disabled=false;
+};
+$('#btnEvoReplay').onclick=()=>{ if(EVO) renderEvo(EVO,true); };
+(async()=>{ try{ const L=await api('/api/last_results'); if(L.evolution) renderEvo(L.evolution,false); }catch(e){} })();
 
 // ---------- boot ----------
 renderPicker();

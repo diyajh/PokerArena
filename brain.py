@@ -459,35 +459,161 @@ def is_mistake(action, ctx):
         return True
     return False
 
+
+# ---------------- 🎙️ Drex Commentator + 🧠 player read ----------------
+PLAY_TYPES = {
+    "bluff": "BLUFF: bet or raised with a weak hand to make others fold",
+    "value_bet": "VALUE BET: bet a strong hand to get paid",
+    "hero_call": "HERO CALL: called a big bet with a mediocre hand, suspecting a bluff",
+    "smart_fold": "SMART FOLD: folded a hand that was likely beaten",
+    "trap": "TRAP: checked or just called with a strong hand to lure others in",
+    "blunder": "BLUNDER: a clearly bad decision",
+}
+PLAY_EMOJI = {"bluff": "🃏", "value_bet": "💰", "hero_call": "🦸", "smart_fold": "🧠", "trap": "🪤", "blunder": "🤦"}
+STYLES = {
+    "loose_aggressive": "Loose-aggressive: plays many hands and raises a lot",
+    "tight_aggressive": "Tight-aggressive: plays few hands but raises when in",
+    "calling_station": "Calling station: calls too much, rarely raises or folds",
+    "tight_passive": "Tight-passive (rock): folds a lot, rarely raises",
+    "balanced": "Balanced and hard to read",
+}
+
+
+def _moments(decisions):
+    out = []
+    for i, d in enumerate(decisions):
+        if d["choice"] == "check_call" and d.get("to_call", 1) == 0:
+            continue  # skip plain checks
+        out.append((f"m{i}", d))
+    return out[-8:]
+
+
+def commentate(decisions, result, human=None):
+    """One Drex call per hand: pick the highlight, label it, and read the human's style."""
+    moments = _moments(decisions)
+    if not moments:
+        return None
+    winners = ", ".join(result.get("winners", [])) if result else "?"
+    lines = [f"Poker hand summary. Winner: {winners}. Board: {' '.join((result or {}).get('board', [])) or '(none)'}."]
+    for key, d in moments:
+        lines.append(f"[{key}] {d['name']} ({d['personality']}) on the {d['street']}: {d['choice']} "
+                     f"holding {' '.join(d.get('hole') or [])} with {d.get('equity', 0):.0%} win chance.")
+    if human:
+        lines.append(f"Human player history: {human['actions']} actions, raises {human['raise_rate']:.0%}, "
+                     f"folds {human['fold_rate']:.0%}, caught bluffing {human['bluffs']}/{human['showdowns']} showdowns.")
+    text = "\n".join(lines)
+    criteria = {k: f"{d['name']} {d['choice']} on the {d['street']} ({d.get('equity', 0):.0%} to win)" for k, d in moments}
+    t0 = time.perf_counter()
+    source = "local"
+    try:
+        if not drex_configured():
+            raise RuntimeError("no drex")
+        questions = {
+            "highlight": {"type": "choice", "instructions": "As a TV poker commentator, which moment was the highlight of this hand?",
+                          "criteria": criteria if len(criteria) >= 2 else {**criteria, "none": "Nothing notable"}},
+            "play_type": {"type": "choice", "instructions": "What kind of play was that highlight?", "criteria": PLAY_TYPES},
+        }
+        if human and human["actions"] >= 3:
+            questions["human_style"] = {"type": "choice", "instructions": "How would you describe the human player's style?",
+                                        "criteria": STYLES}
+        resp = requests.post(DREX_URL, headers={"Authorization": f"Bearer {DREX_API_KEY}"},
+                             json={"model": DREX_MODEL, "state": text, "questions": questions}, timeout=DREX_TIMEOUT + 2)
+        resp.raise_for_status()
+        ans = resp.json().get("answers") or {}
+        hp = (ans.get("highlight") or {}).get("probabilities") or {}
+        tp = (ans.get("play_type") or {}).get("probabilities") or {}
+        sp = (ans.get("human_style") or {}).get("probabilities") or {}
+        hk = max((k for k in hp if k in criteria), key=hp.get)
+        tk = max(tp, key=tp.get)
+        source = "drex"
+        style = (max(sp, key=sp.get), sp[max(sp, key=sp.get)]) if sp else None
+        conf = tp[tk]
+    except Exception:
+        # local heuristic: lowest-equity raise = bluff, else highest-equity raise = value bet
+        raises = [(k, d) for k, d in moments if d["choice"] in RAISE_ACTIONS]
+        calls = [(k, d) for k, d in moments if d["choice"] == "check_call"]
+        if raises and min(d.get("equity", 1) for _, d in raises) < 0.35:
+            hk = min(raises, key=lambda x: x[1].get("equity", 1))[0]; tk = "bluff"
+        elif raises:
+            hk = max(raises, key=lambda x: x[1].get("equity", 0))[0]; tk = "value_bet"
+        elif calls:
+            hk = min(calls, key=lambda x: x[1].get("equity", 1))[0]; tk = "hero_call"
+        else:
+            hk = moments[-1][0]; tk = "smart_fold"
+        conf, style = None, None
+        if human and human["actions"] >= 3:
+            rr, fr = human["raise_rate"], human["fold_rate"]
+            st = ("loose_aggressive" if rr >= 0.4 and fr < 0.35 else "tight_aggressive" if rr >= 0.3 else
+                  "tight_passive" if fr >= 0.5 else "calling_station" if fr < 0.2 else "balanced")
+            style = (st, None)
+    d = dict(moments)[hk]
+    out = {"who": d["name"], "personality": d["personality"], "street": d["street"], "choice": d["choice"],
+           "equity": d.get("equity", 0), "type": tk, "label": PLAY_TYPES[tk].split(":")[0], "emoji": PLAY_EMOJI[tk],
+           "confidence": conf, "source": source, "ms": round((time.perf_counter() - t0) * 1000)}
+    if style:
+        out["human_style"] = {"key": style[0], "label": STYLES[style[0]].split(":")[0], "p": style[1]}
+    return out
+
 # ---------------- personalities ----------------
-def pick(personality, probs, rng):
+# Default "genes" per agent. Evolution Mode mutates these.
+DEFAULT_GENES = {
+    "aggression": 1.0,       # multiplies Drex's raise/all-in probabilities (all agents)
+    "caution": 1.0,          # multiplies Drex's fold probability (all agents)
+    "raise_boost": 1.5,      # Risk-Taker: extra raise boost
+    "raise_threshold": 0.6,  # Conservative: raise only if raise confidence > this
+    "temperature": 0.6,      # Wildcard: <1 flattens odds (more chaos)
+    "bluff_threshold": MANIP_BLUFF_THRESHOLD,  # Manipulator: bluff / hero-call when Drex's read >= this
+}
+GENE_RANGES = {"aggression": (0.3, 3.0), "caution": (0.3, 3.0), "raise_boost": (1.0, 4.0),
+               "raise_threshold": (0.25, 0.9), "temperature": (0.2, 1.5), "bluff_threshold": (0.2, 0.95)}
+
+
+def genes_of(p):
+    g = dict(DEFAULT_GENES)
+    g.update(getattr(p, "genes", None) or {})
+    return g
+
+
+def apply_genes(probs, g):
+    if g["aggression"] == 1.0 and g["caution"] == 1.0:
+        return probs
+    m = {a: v * (g["aggression"] if a in RAISE_ACTIONS else g["caution"] if a == "fold" else 1.0)
+         for a, v in probs.items()}
+    z = sum(m.values()) or 1.0
+    return {a: v / z for a, v in m.items()}
+
+
+def pick(personality, probs, rng, g=None):
+    g = g or DEFAULT_GENES
     legal_probs = {a: v for a, v in probs.items() if v > 0}
     top = max(legal_probs, key=legal_probs.get)
     if personality == "risk_taker":
-        boosted = {a: v * (1.5 if a in RAISE_ACTIONS else 1) for a, v in legal_probs.items()}
-        return max(boosted, key=boosted.get), "Boosted raise/all-in odds x1.5, then took the top option"
+        b = g["raise_boost"]
+        boosted = {a: v * (b if a in RAISE_ACTIONS else 1) for a, v in legal_probs.items()}
+        return max(boosted, key=boosted.get), f"Boosted raise/all-in odds x{b:.2f}, then took the top option"
     if personality == "conservative":
+        th = g["raise_threshold"]
         raise_p = sum(v for a, v in legal_probs.items() if a in RAISE_ACTIONS)
-        if raise_p > 0.6:
+        if raise_p > th:
             best = max((a for a in legal_probs if a in RAISE_ACTIONS), key=legal_probs.get)
-            return best, f"Raise confidence {raise_p:.0%} > 60% so raised"
+            return best, f"Raise confidence {raise_p:.0%} > {th:.0%} so raised"
         pc, pf = legal_probs.get("check_call", 0), legal_probs.get("fold", 0)
         if pf == 0 or pc > 1.25 * pf:
             return "check_call", f"Raise confidence only {raise_p:.0%}, so call/check"
         return "fold", f"Raise confidence only {raise_p:.0%} and fold > call"
     if personality == "wildcard":
-        flat = {a: v ** 0.6 for a, v in legal_probs.items()}
+        t = g["temperature"]
+        flat = {a: v ** t for a, v in legal_probs.items()}
         z = sum(flat.values())
         r, acc = rng.random() * z, 0.0
         for a, v in flat.items():
             acc += v
             if r <= acc:
-                return a, "Rolled the dice on Drex's (flattened) odds"
+                return a, f"Rolled the dice on Drex's odds (temperature {t:.2f})"
         return top, "Rolled the dice"
     if personality == "manipulator":
         return top, "Top option, with opponent history weighted heavily"
     return top, "Took Drex's top option"
-
 
 
 def guard(personality, action, why, ctx):
@@ -640,7 +766,9 @@ class Brain:
         if raw_top not in legal:
             st["illegal"] += 1
         probs = mask(raw_probs, legal, to_call=ctx["to_call"])
-        action, why = pick(p.personality, probs, self.rng)
+        g = genes_of(p)
+        probs = apply_genes(probs, g)
+        action, why = pick(p.personality, probs, self.rng, g)
         action, why = guard(p.personality, action, why, ctx)
         ev = evidence(ctx, emphasize)
         ev.insert(0, f"Hand: {ctx['hand_read']}")
@@ -648,21 +776,21 @@ class Brain:
         if target is not None and bluff_p is not None:
             who = "Drex" if source == "drex" else "Estimate"
             ev.append(f"{who}: {target['name']} is bluffing {bluff_p:.0%}")
-            if bluff_p >= MANIP_BLUFF_THRESHOLD and action == "fold" and "check_call" in legal:
+            if bluff_p >= g["bluff_threshold"] and action == "fold" and "check_call" in legal:
                 action = "check_call"
                 why = f"Hero call: {who} says {target['name']} is bluffing {bluff_p:.0%}, so call instead of fold"
         fold_p = extras.get("target_fold_p")
         if target is not None and fold_p is not None:
             who = "Drex" if source == "drex" else "Estimate"
             ev.append(f"{who}: {target['name']} folds to a big raise {fold_p:.0%}")
-            if fold_p >= MANIP_BLUFF_THRESHOLD and action not in RAISE_ACTIONS and ctx["n_in_hand"] <= 4:
+            if fold_p >= g["bluff_threshold"] and action not in RAISE_ACTIONS and ctx["n_in_hand"] <= 4:
                 for r in ("raise_pot", "raise_half_pot"):
                     if r in legal and legal[r] <= 0.2 * (p.chips + p.bet):  # only cheap bluffs
                         action = r
                         why = (f"Exploit: {who} says {target['name']} folds to pressure "
                                f"{fold_p:.0%} of the time, so raise instead of '{ALABEL.get(probs and max(probs, key=probs.get), '')}'")
                         break
-        info = {"seat": p.seat, "name": p.name, "personality": p.personality,
+        info = {"seat": p.seat, "name": p.name, "personality": p.personality, "to_call": ctx["to_call"],
                 "probs": {a: round(v, 3) for a, v in probs.items()},
                 "choice": action, "raw_choice": raw_top, "illegal": raw_top not in legal,
                 "mistake": is_mistake(max(probs, key=probs.get), ctx), "source": source, "ms": round(ms, 2), "equity": ctx["equity"],
