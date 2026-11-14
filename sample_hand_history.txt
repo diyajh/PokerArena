@@ -1,0 +1,39 @@
+=== HoldemManager export v2.1 (partial)  table "Drex Arena #3"  NL 10/20 ===
+#4412  dealer: Wildcard
+Seat 2: Risk-Taker (1040)   Seat 3: Conservative (990)   Seat 4: Statistician (1000)   Seat 5: Wildcard (970)
+Risk-Taker raises to 60
+Conservative folds
+Statistician calls 60
+Wildcard folds
+*** FLOP *** [Ks 9d 4c]
+Risk-Taker bets 120
+Statistician folds
+-- Risk-Taker collected 150 (no showdown) --
+
+#4413
+Risk-Taker: raises 80 | Conservative - calls 80 | Statistician: fold | Wildcard folds
+*** FLOP *** [Qh 7h 2s]   Risk-Taker bets 160 / Conservative calls
+*** TURN *** [5c]         Risk-Taker ALL-IN (700)
+Conservative folds   (said in chat: "not worth it")
+
+#4414 ...
+Statistician raises to 60; Risk-Taker re-raises to 180; Statistician folds; Conservative folds; Wildcard checks?? (late) -> Wildcard calls 20
+***SHOW DOWN***  Risk-Taker shows [7c 2d] - high card  << BLUFF
+Wildcard shows [Jh Js] - pair of jacks, wins 410
+
+#4415
+Conservative folds. Statistician raises 50. Risk-Taker calls. Wildcard raises all-in 400!! Statistician folds. Risk-Taker folds
+Wildcard shows [9s 8s] - nine high (bluff) collected 170
+
+#4416 (copied from phone notes, messy)
+risk-taker bet 40 > conservative fold > statistician call > wildcard fold
+flop Ah 6d 6s : risk-taker bets 90, statistician raises 270, risk-taker all-in, statistician calls
+SHOWDOWN: Statistician [Ad Kc] two pair aces & sixes WINS ; Risk-Taker [Tc 3c] ten high -> bluff caught again
+
+#4417
+Conservative raises to 60 (first raise in 30 hands!), everyone folds
+Conservative shows [Ac Ah]
+
+#4418
+Risk-Taker raises 60, Conservative folds, Statistician folds, Wildcard calls
+flop 8h 8c 2d : Risk-Taker bets 100, Wildcard folds
