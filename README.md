@@ -36,5 +36,17 @@ pip install -r requirements.txt
 cp .env.example .env    # add DREX_API_KEY (and NDI_API_KEY for uploads)
 python app.py           # → http://localhost:5050
 ```
+Without a key, a local fallback brain is used and the UI says so. `python record_demo.py` auto-records a demo video of every feature.
 
-Built with Drex, NDI, Adobe Firefly (bot avatars), Python and Flask.
+## 🤖 Work on this repo with Nace Intern
+This repo is **Intern-ready**: [nace-ai/intern](https://github.com/nace-ai/intern) is Nace's open-source coding agent with a two-part brain, where Drex (System 1) watches every turn of a worker model (System 2). `AGENTS.md` gives it this project's rules.
+```bash
+uv tool install "intern-agent @ git+https://github.com/nace-ai/intern"
+export NACE_API_KEY=...          # same nace_sk_ key: Drex as System 1
+export OPENROUTER_API_KEY=...    # or any provider for System 2
+cd PokerArena
+intern --system2 openrouter/qwen/qwen3.8-27b "Add a new personality called 'Copycat' that mirrors the last opponent's action"
+```
+So Drex both **plays the game** (every bot move) and **supervises the agent that builds the game**.
+
+Built with
