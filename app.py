@@ -63,7 +63,7 @@ def carried_chips(g):
     """Chips each player walks away with (personality -> chips). Chips still in an
     unfinished pot go back to whoever put them in. Busted players rebuy at 1000."""
     if g is None:
-        return {}
+        return load_bankroll()  # server restarted: pick up the chips saved on disk
     out = {}
     for p in g.players:
         chips = p.chips + (0 if g.hand_over else p.contrib)
@@ -159,11 +159,30 @@ def save_profile(g, style=None):
         pass
 
 
+BANKROLL_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bankroll.json")
+
+
+def load_bankroll():
+    try:
+        return json.load(open(BANKROLL_FILE))
+    except Exception:
+        return {}
+
+
+def save_bankroll(g):
+    try:
+        json.dump(carried_chips(g), open(BANKROLL_FILE, "w"))
+    except Exception:
+        pass
+
+
 def after_hand(g):
     """Once per finished hand: Drex commentary + update your saved profile."""
     if getattr(g, "_done_hand", None) == g.hand_no:
         return
     g._done_hand = g.hand_no
+    if g is PLAY_GAME:
+        save_bankroll(g)
     hum = human_summary(g)
     try:
         g.commentary = commentate(g.decisions, g.result, hum)
