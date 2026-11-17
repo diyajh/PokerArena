@@ -221,6 +221,7 @@ def respond(extra=None):
         out["peek"] = {
             "decisions": g.decisions,
             "holes": {p.name: cards_str(p.hole) for p in g.players if p.hole},
+            "timeline": g.hand_log, "hand_no": g.hand_no,
         }
     if any(p.human for p in g.players):
         out["profile"] = human_summary(g)

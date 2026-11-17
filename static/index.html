@@ -183,6 +183,11 @@ pre.ndi{font-size:11px;background:#0d131a;padding:8px;border-radius:8px;max-heig
 .caption small{font-weight:600;opacity:.85;margin-left:8px}
 .caption .mic{background:#fff;color:#c0392b;border-radius:6px;padding:1px 6px;margin-right:8px;font-size:11px;letter-spacing:1px}
 @keyframes slideup{from{transform:translate(-50%,30px);opacity:0}}
+.rpboard{display:flex;flex-direction:column;align-items:center;gap:8px;padding:14px;border-radius:14px;background:radial-gradient(ellipse at center,#14784c 0%,var(--felt) 50%,var(--felt2) 100%)}
+.rpboard .board{min-height:78px}
+.rpboard .pot{order:0}
+.rpstep{margin-top:12px;background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:12px;min-height:120px}
+.rpstep .who{font-size:16px;font-weight:800;margin-bottom:6px}
 .help h4{color:var(--gold);margin:12px 0 6px;font-size:14px}
 .help ul{margin:0 0 6px 18px;display:flex;flex-direction:column;gap:6px;line-height:1.45}
 button.on{border-color:var(--gold);color:var(--gold);background:#2a2412}
@@ -255,6 +260,7 @@ body.online:not(.host) #playersWrap{display:none}
         </div>
         <div class="btngroup" id="toolsGroup">
           <button id="btnPeek" disabled>🧠 Brain-peek</button>
+          <button id="btnReplay" disabled title="Step through the last hand move by move">⏪ Replay</button>
           <button id="btnTeach" title="After each hand, review your moves against Drex">🎓 Teach me</button>
         </div>
         <div class="spacer"></div>
@@ -381,6 +387,21 @@ body.online:not(.host) #playersWrap{display:none}
       </div>
     </div>
     <div class="err" id="onErr"></div>
+  </div>
+</div>
+
+<!-- Hand replay -->
+<div class="modal" id="replayModal">
+  <div class="box small">
+    <h2><span>⏪ Replay: hand <span id="rpHand"></span></span> <button class="ghost" id="closeReplay">✕</button></h2>
+    <div class="rpboard"><span class="street" id="rpStreet"></span><div class="board" id="rpBoard"></div><div class="pot" id="rpPot"></div></div>
+    <div id="rpStep" class="rpstep"></div>
+    <div class="row" style="justify-content:space-between;margin-top:12px">
+      <button id="rpPrev">◀ Prev</button>
+      <span class="muted" id="rpCount"></span>
+      <button class="primary" id="rpNext">Next ▶</button>
+    </div>
+    <div class="muted" id="rpHoles" style="margin-top:10px"></div>
   </div>
 </div>
 
@@ -710,6 +731,7 @@ async function handle(res){
   const gameOver = res.game_over || STATE.game_over;
   $('#btnNext').disabled = !STATE.hand_over || gameOver;
   $('#btnPeek').disabled = !PEEK;
+  $('#btnReplay').disabled = !PEEK?.timeline?.length;
   $('#btnNew').textContent = STATE.can_resume ? '↩ Back to my game' : 'New game';
   busy=false;
   const human = STATE.players.find(p=>p.human);
@@ -766,6 +788,63 @@ $('#btnBoard').onclick=async()=>{
 $('#closeBoard').onclick=()=>closeModal('#boardModal');
 $('#btnHelp').onclick=()=>openModal('#helpModal');
 $('#closeHelp').onclick=()=>closeModal('#helpModal');
+
+// ---------- ⏪ hand replay ----------
+// Built from the hand's public timeline (blinds, moves, streets, result) plus the decisions in Brain-peek.
+let RP=null;
+function buildReplay(peek, players){
+  const name=s=>players[s]?.name ?? '?';
+  const steps=[]; let board=[], pot=0, street='preflop', di=0;
+  const blinds=[];
+  for(const ev of peek.timeline||[]){
+    if(ev.type==='blind'){ pot+=ev.amount; blinds.push(`${name(ev.seat)} ${ev.amount}`); continue; }
+    if(blinds.length){ steps.push({board:[...board], pot, street, html:`<div class="who">Blinds</div><div class="muted">${blinds.join(' · ')}</div>`}); blinds.length=0; }
+    if(ev.type==='action'){
+      pot=ev.pot;
+      const k=peek.decisions.findIndex((d,i)=>i>=di && d.seat===ev.seat), d=k>=0?peek.decisions[k]:null;
+      if(k>=0) di=k+1;
+      const probs = d ? (d.probs || d.coach?.probs) : null;
+      const src = d ? (d.source==='human' ? (d.coach ? `${SRC_LABEL[d.coach.source]||d.coach.source}'s advice to ${name(ev.seat)}` : '') : (SRC_LABEL[d.source]||d.source)) : '';
+      const bars = probs ? `<div class="muted" style="margin:6px 0 2px">${src}</div>`+Object.entries(probs).map(([a,v])=>`
+        <div class="bar ${a===ev.action?'top':''}"><div class="lbl">${ALABEL[a]}</div><div class="track"><div class="fill" style="width:${(v*100).toFixed(1)}%"></div></div><div class="pct">${(v*100).toFixed(0)}%</div></div>`).join('')
+        : `<div class="muted" style="margin-top:6px">${d?.source==='rule'?'Rule-based bot: no probabilities':d?.source==='llm'?'LLM bot: one text answer, no probabilities':'No Drex odds for this move'}</div>`;
+      steps.push({board:[...board], pot, street, html:`<div class="who">${name(ev.seat)}: ${ev.label}</div>
+        ${d?`<div class="muted">Win chance ${Math.round(d.equity*100)}%${d.why?` · ${d.why}`:''}</div>`:''}${bars}`});
+    } else if(ev.type==='street'){
+      board=ev.board; street=ev.street;
+      steps.push({board:[...board], pot, street, html:`<div class="who">${ev.street[0].toUpperCase()+ev.street.slice(1)}</div><div class="muted">${ev.board.map(prettyCard).join(' ')}</div>`});
+    } else if(ev.type==='hand_over'){
+      board=ev.board||board;
+      const won=Object.entries(ev.won).map(([s,a])=>`${name(+s)} +${a}`).join(', ');
+      const shown=Object.entries(ev.hands||{}).map(([s,h])=>`<div>${name(+s)}: ${h.cards.map(prettyCard).join(' ')} · ${h.hand}</div>`).join('');
+      steps.push({board:[...board], pot:ev.pot, street:'result', html:`<div class="who">🏆 ${won}</div>${ev.showdown?shown:'<div class="muted">Everyone else folded</div>'}`});
+    }
+  }
+  return steps;
+}
+function showReplayStep(){
+  const s=RP.steps[RP.i];
+  $('#rpBoard').innerHTML=s.board.map(c=>cardHTML(c)).join('') || '<span class="muted">No cards on the board yet</span>';
+  $('#rpPot').textContent='Pot '+s.pot; $('#rpStreet').textContent=s.street;
+  $('#rpStep').innerHTML=s.html;
+  $('#rpCount').textContent=`Step ${RP.i+1} of ${RP.steps.length}`;
+  $('#rpPrev').disabled=RP.i===0; $('#rpNext').disabled=RP.i===RP.steps.length-1;
+}
+$('#btnReplay').onclick=()=>{
+  if(!PEEK?.timeline?.length) return;
+  RP={steps:buildReplay(PEEK, STATE.players), i:0};
+  $('#rpHand').textContent='#'+(PEEK.hand_no||STATE.hand_no);
+  $('#rpHoles').innerHTML='Cards: '+Object.entries(PEEK.holes).map(([n,c])=>`<b>${n}</b> ${c.map(prettyCard).join(' ')}`).join(' &nbsp;·&nbsp; ');
+  showReplayStep(); openModal('#replayModal');
+};
+$('#rpPrev').onclick=()=>{ if(RP.i>0){ RP.i--; showReplayStep(); } };
+$('#rpNext').onclick=()=>{ if(RP.i<RP.steps.length-1){ RP.i++; showReplayStep(); } };
+$('#closeReplay').onclick=()=>closeModal('#replayModal');
+window.addEventListener('keydown',e=>{
+  if(!$('#replayModal').classList.contains('open')) return;
+  if(e.key==='ArrowRight') $('#rpNext').click();
+  if(e.key==='ArrowLeft') $('#rpPrev').click();
+});
 
 // ---------- 🎓 teach me ----------
 let TEACH=false; try{ TEACH = localStorage.getItem('drexTeach')==='1'; }catch(e){}
@@ -1050,6 +1129,7 @@ async function poll(){
     else if(res.events.length || !STATE || STATE.mode!=='online'){
       await handle(res);
       $('#btnPeek').disabled = !PEEK;
+      $('#btnReplay').disabled = !PEEK?.timeline?.length;
     }
     renderRoom();
   }catch(e){

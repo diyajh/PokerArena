@@ -158,6 +158,7 @@ class Game:
         self.hand_no = 0
         self.hand_over = True
         self.events = []
+        self.hand_log = []
         self.decisions = []   # brain-peek log for current hand
         self.result = None
         self.board = []
@@ -166,6 +167,7 @@ class Game:
     # ---------- helpers ----------
     def emit(self, **ev):
         self.events.append(ev)
+        self.hand_log.append(ev)  # public timeline of this hand, for the replay (no hole cards in events)
 
     def pop_events(self):
         ev, self.events = self.events, []
@@ -194,6 +196,7 @@ class Game:
         """rig = {"holes": {seat: ["Ah","Kd"]}, "board": ["2c",...]} for demo hands."""
         for p in self.players:
             p.reset_hand()
+        self.hand_log = []
         alive = [p for p in self.players if not p.out]
         if len(alive) < 2:
             self.hand_over = True

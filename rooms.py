@@ -378,6 +378,7 @@ class Room:
                 "decisions": [d for d in g.decisions if d.get("source") != "human" or d["seat"] == me],
                 "holes": {p.name: cards_str(p.hole) for p in g.players
                           if p.hole and (not p.human or p.seat == me or str(p.seat) in shown)},
+                "timeline": g.hand_log, "hand_no": g.hand_no,
             }
         return out
 
