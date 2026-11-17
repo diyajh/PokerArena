@@ -183,6 +183,8 @@ pre.ndi{font-size:11px;background:#0d131a;padding:8px;border-radius:8px;max-heig
 .caption small{font-weight:600;opacity:.85;margin-left:8px}
 .caption .mic{background:#fff;color:#c0392b;border-radius:6px;padding:1px 6px;margin-right:8px;font-size:11px;letter-spacing:1px}
 @keyframes slideup{from{transform:translate(-50%,30px);opacity:0}}
+.help h4{color:var(--gold);margin:12px 0 6px;font-size:14px}
+.help ul{margin:0 0 6px 18px;display:flex;flex-direction:column;gap:6px;line-height:1.45}
 button.on{border-color:var(--gold);color:var(--gold);background:#2a2412}
 .tmove{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin-bottom:8px;font-size:12px}
 .tmove.good{border-left:4px solid var(--green)}.tmove.diff{border-left:4px solid var(--gold)}
@@ -262,6 +264,7 @@ body.online:not(.host) #playersWrap{display:none}
         </div>
         <div class="btngroup" id="extrasGroup">
           <button id="btnBoard" title="Online players ranked by chips">🏆 Leaderboard</button>
+          <button id="btnHelp" title="How to play">❓ How to play</button>
         </div>
         <button class="online" id="btnOnline" title="Get a code, send it to friends, play at the same table">🌐 Play online</button>
       </div>
@@ -377,6 +380,29 @@ body.online:not(.host) #playersWrap{display:none}
       </div>
     </div>
     <div class="err" id="onErr"></div>
+  </div>
+</div>
+
+<!-- How to play -->
+<div class="modal" id="helpModal">
+  <div class="box small help">
+    <h2>❓ How to play <button class="ghost" id="closeHelp">✕</button></h2>
+    <h4>Poker in 60 seconds</h4>
+    <ul>
+      <li>You get <b>2 private cards</b>. Up to <b>5 shared cards</b> come out in the middle (flop 3, turn 1, river 1).</li>
+      <li>Your best <b>5-card hand</b> from all 7 wins the pot.</li>
+      <li><b>Hand ranks, best first:</b> Royal flush › Straight flush › Four of a kind › Full house › Flush › Straight › Three of a kind › Two pair › Pair › High card.</li>
+      <li><b>Fold</b> = give up this hand. <b>Check</b> = pass for free. <b>Call</b> = match the bet. <b>Raise</b> = bet more so others must pay to stay in.</li>
+      <li><b>Pot odds</b> = what you must pay ÷ the pot after you pay. If your win chance is higher, calling makes money over time.</li>
+    </ul>
+    <h4>How this app works</h4>
+    <ul>
+      <li><b>Drex bots:</b> every bot move is a Drex call. Drex scores each legal move, and each personality uses those odds its own way.</li>
+      <li><b>💡 Coach bars:</b> on your turn, Drex's odds for <i>your</i> moves (gold = its pick). <b>🎓 Teach me</b> reviews your moves after the hand.</li>
+      <li><b>🧠 Brain-peek</b> and <b>⏪ Replay:</b> after a hand, see every bot's cards, its odds and why it moved.</li>
+      <li><b>Chips carry over</b> between games. Only a player at 0 starts again at 1000. <b>🌐 Play online</b> to share a room code with friends.</li>
+    </ul>
+    <div class="muted">Shortcuts: F fold · C check/call · H raise ½ pot · P raise pot · A all-in · N next hand · B brain-peek</div>
   </div>
 </div>
 
@@ -702,6 +728,8 @@ $('#btnBoard').onclick=async()=>{
   }catch(e){ $('#board2').textContent='Could not load: '+e.message; }
 };
 $('#closeBoard').onclick=()=>closeModal('#boardModal');
+$('#btnHelp').onclick=()=>openModal('#helpModal');
+$('#closeHelp').onclick=()=>closeModal('#helpModal');
 
 // ---------- 🎓 teach me ----------
 let TEACH=false; try{ TEACH = localStorage.getItem('drexTeach')==='1'; }catch(e){}
@@ -818,7 +846,7 @@ window.addEventListener('keydown',e=>{
   if(map[e.key]){ const b=$(`#actions button[data-a="${map[e.key]}"]`); if(b && !b.disabled) act(map[e.key]); }
   if(e.key==='n' && !$('#btnNext').disabled) next();
   if(e.key==='b' && PEEK) openPeek();
-  if(e.key==='Escape') $('#peekModal').classList.remove('open');
+  if(e.key==='Escape') $$('.modal').forEach(m=>m.classList.remove('open'));
 });
 window.addEventListener('resize',()=>{ if(STATE && !busy) renderSeats(STATE); });
 
