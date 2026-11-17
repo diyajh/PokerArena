@@ -738,6 +738,12 @@ def api_room_react():
     return room_call(go)
 
 
+@app.get("/api/leaderboard")
+def api_leaderboard():
+    """Online players ranked by chips (saved by name)."""
+    return jsonify({"players": rooms.leaderboard()})
+
+
 @app.post("/api/room/leave")
 def api_room_leave():
     return room_call(lambda room, token, body: room.leave(token) or {"ok": True})

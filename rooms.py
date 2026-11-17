@@ -40,25 +40,54 @@ def clean_name(name):
     return name or "Player"
 
 
+def _read_records():
+    """name (lower case) -> {"name", "chips", "hands", "won"}. Older files stored just chips."""
+    try:
+        data = json.load(open(CHIPS_FILE))
+    except Exception:
+        return {}
+    return {k: v if isinstance(v, dict) else {"name": k, "chips": v, "hands": 0, "won": 0}
+            for k, v in data.items()}
+
+
+def _write_records(data):
+    try:
+        json.dump(data, open(CHIPS_FILE, "w"))
+    except Exception:
+        pass
+
+
+def _record(data, name):
+    return data.setdefault(name.lower(), {"name": name, "chips": START_CHIPS, "hands": 0, "won": 0})
+
+
 def load_chips(name):
     with _chips_lock:
-        try:
-            return json.load(open(CHIPS_FILE)).get(name.lower(), START_CHIPS)
-        except Exception:
-            return START_CHIPS
+        rec = _read_records().get(name.lower())
+        return rec["chips"] if rec else START_CHIPS
 
 
 def save_chips(updates):
     with _chips_lock:
-        try:
-            data = json.load(open(CHIPS_FILE))
-        except Exception:
-            data = {}
-        data.update({k.lower(): v for k, v in updates.items()})
-        try:
-            json.dump(data, open(CHIPS_FILE, "w"))
-        except Exception:
-            pass
+        data = _read_records()
+        for name, chips in updates.items():
+            _record(data, name)["chips"] = chips
+        _write_records(data)
+
+
+def record_hand(rows):
+    """rows: [(name, chips, won_this_hand)] for each person dealt into the hand that just ended."""
+    with _chips_lock:
+        data = _read_records()
+        for name, chips, won in rows:
+            rec = _record(data, name)
+            rec.update(name=name, chips=chips, hands=rec["hands"] + 1, won=rec["won"] + int(won))
+        _write_records(data)
+
+
+def leaderboard():
+    rows = sorted(_read_records().values(), key=lambda r: (r["chips"], r["won"]), reverse=True)
+    return [{"name": r["name"], "chips": r["chips"], "hands": r["hands"], "won": r["won"]} for r in rows]
 
 
 class Seat:
@@ -231,7 +260,11 @@ class Room:
         self.emit(type="system", text=f"{s.name} is back with 1000 chips")
 
     def _hand_finished(self):
-        save_chips({p.name: p.chips for p in self.game.players if p.human})
+        g = self.game
+        won = (g.result or {}).get("won", {})
+        # people who were dealt cards this hand (not late joiners waiting, not people who stepped away)
+        record_hand([(p.name, p.chips, str(p.seat) in won) for p in g.players if p.human and p.hole])
+        save_chips({p.name: p.chips for p in g.players if p.human and not p.hole})
 
     # ---------- background loop: bots, timeouts, people leaving ----------
     def _loop(self):

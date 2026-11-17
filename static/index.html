@@ -260,6 +260,9 @@ body.online:not(.host) #playersWrap{display:none}
           <button id="btnDemo" title="Rigged deal: Manipulator vs the bluffing Risk-Taker">⭐ Demo</button>
           <button id="btnWatch">👀 Watch bots</button>
         </div>
+        <div class="btngroup" id="extrasGroup">
+          <button id="btnBoard" title="Online players ranked by chips">🏆 Leaderboard</button>
+        </div>
         <button class="online" id="btnOnline" title="Get a code, send it to friends, play at the same table">🌐 Play online</button>
       </div>
       <div class="tablewrap" id="tablewrap">
@@ -374,6 +377,15 @@ body.online:not(.host) #playersWrap{display:none}
       </div>
     </div>
     <div class="err" id="onErr"></div>
+  </div>
+</div>
+
+<!-- Leaderboard -->
+<div class="modal" id="boardModal">
+  <div class="box small">
+    <h2>🏆 Players leaderboard <button class="ghost" id="closeBoard">✕</button></h2>
+    <div class="muted" style="margin-bottom:10px">Everyone who has played online, ranked by chips. Chips are saved by name.</div>
+    <div id="board2"></div>
   </div>
 </div>
 
@@ -673,6 +685,23 @@ function setActions(coach){
     } else if(a!=='fold'){ b.textContent = ALABEL[a].replace(' / Call',''); }
   });
 }
+
+// ---------- 🏆 leaderboard ----------
+function openModal(id){ $(id).classList.add('open'); }
+function closeModal(id){ $(id).classList.remove('open'); }
+$$('.modal').forEach(m=>m.addEventListener('click',e=>{ if(e.target===m) m.classList.remove('open'); }));
+$('#btnBoard').onclick=async()=>{
+  openModal('#boardModal'); $('#board2').innerHTML='<span class="spinner"></span>';
+  try{
+    const r=await api('/api/leaderboard'), me=(ONLINE?.name||'').toLowerCase();
+    $('#board2').innerHTML = !r.players.length
+      ? '<div class="muted">Nobody has played online yet. Click 🌐 Play online to start a room.</div>'
+      : `<table class="lb"><tr><th>#</th><th>Player</th><th>Chips</th><th>Hands played</th><th>Hands won</th></tr>`+
+        r.players.map((p,i)=>`<tr${p.name.toLowerCase()===me?' style="outline:1px solid var(--gold)"':''}><td>${i===0?'🥇':i===1?'🥈':i===2?'🥉':i+1}</td>
+          <td>${p.name}</td><td>${p.chips}</td><td>${p.hands}</td><td>${p.won}${p.hands?` <span class="muted">(${Math.round(100*p.won/p.hands)}%)</span>`:''}</td></tr>`).join('')+'</table>';
+  }catch(e){ $('#board2').textContent='Could not load: '+e.message; }
+};
+$('#closeBoard').onclick=()=>closeModal('#boardModal');
 
 // ---------- 🎓 teach me ----------
 let TEACH=false; try{ TEACH = localStorage.getItem('drexTeach')==='1'; }catch(e){}
