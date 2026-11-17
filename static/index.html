@@ -265,6 +265,7 @@ body.online:not(.host) #playersWrap{display:none}
         <div class="btngroup" id="extrasGroup">
           <button id="btnBoard" title="Online players ranked by chips">🏆 Leaderboard</button>
           <button id="btnHelp" title="How to play">❓ How to play</button>
+          <button id="btnMute" title="Sound on/off">🔊</button>
         </div>
         <button class="online" id="btnOnline" title="Get a code, send it to friends, play at the same table">🌐 Play online</button>
       </div>
@@ -570,6 +571,40 @@ function banner(text){
 }
 function log(text, cls=''){ const d=document.createElement('div'); d.className=cls; d.innerHTML=text; $('#log').appendChild(d); $('#log').scrollTop=1e9; }
 
+// ---------- 🔊 sound (Web Audio, no files) ----------
+let MUTED=false; try{ MUTED = localStorage.getItem('drexMuted')==='1'; }catch(e){}
+let ACTX=null;
+function audio(){
+  if(MUTED) return null;
+  try{ ACTX = ACTX || new (window.AudioContext||window.webkitAudioContext)(); if(ACTX.state==='suspended') ACTX.resume(); }
+  catch(e){ return null; }
+  return ACTX;
+}
+function tone(freq, start, dur, type='sine', vol=.12){
+  const a=audio(); if(!a) return;
+  const t=a.currentTime+start, o=a.createOscillator(), g=a.createGain();
+  o.type=type; o.frequency.setValueAtTime(freq,t);
+  g.gain.setValueAtTime(.0001,t); g.gain.exponentialRampToValueAtTime(vol,t+.01); g.gain.exponentialRampToValueAtTime(.0001,t+dur);
+  o.connect(g).connect(a.destination); o.start(t); o.stop(t+dur+.05);
+}
+function swish(start, dur=.07, vol=.22){  // card sliding on felt: a short burst of filtered noise
+  const a=audio(); if(!a) return;
+  const len=Math.floor(a.sampleRate*dur), buf=a.createBuffer(1,len,a.sampleRate), d=buf.getChannelData(0);
+  for(let i=0;i<len;i++) d[i]=(Math.random()*2-1)*(1-i/len);
+  const s=a.createBufferSource(), f=a.createBiquadFilter(), g=a.createGain();
+  s.buffer=buf; f.type='highpass'; f.frequency.value=1800; g.gain.value=vol;
+  s.connect(f).connect(g).connect(a.destination); s.start(a.currentTime+start);
+}
+const SFX={
+  deal(){ swish(0); swish(.11); },
+  flip(){ swish(0,.05,.18); },
+  chip(){ tone(1900,0,.05,'triangle',.1); tone(2500,.045,.06,'triangle',.08); },
+  win(){ [523,659,784,1047].forEach((f,i)=>tone(f,i*.09,.28,'triangle',.12)); },
+};
+function renderMute(){ $('#btnMute').textContent = MUTED ? '🔇' : '🔊'; $('#btnMute').title = MUTED ? 'Sound is off' : 'Sound is on'; }
+$('#btnMute').onclick=()=>{ MUTED=!MUTED; try{ localStorage.setItem('drexMuted', MUTED?'1':'0'); }catch(e){} renderMute(); if(!MUTED) SFX.chip(); };
+renderMute();
+
 // ---------- event replay ----------
 function speed(){ return watching ? 380 : 650; }
 function pname(seat){ return STATE.players[seat]?.name ?? '?'; }
@@ -588,7 +623,7 @@ async function replay(events, st, peek){
       const pre = JSON.parse(JSON.stringify(st));
       pre.players.forEach(p=>{ p.last_action=null; p.bet=0; if(!p.out){p.folded=false; p.has_cards=true;} if(!p.human) p.hole=null; });
       pre.to_act=null; pre.hand_over=false;
-      renderSeats(pre,{deal:true});
+      renderSeats(pre,{deal:true}); SFX.deal();
       await sleep(450);
     } else if(ev.type==='blind'){
       const b=$('#bet-'+ev.seat); if(b) b.textContent=ev.amount;
@@ -607,7 +642,7 @@ async function replay(events, st, peek){
       if(ev.action==='fold') s.classList.add('folded');
       if(ev.amount>0){
         const b=$('#bet-'+ev.seat); b.textContent = (+b.textContent||0)+ev.amount;
-        flyChips(s.querySelector('.avatar'), $('#pot'), Math.min(6, 1+Math.floor(ev.amount/50)));
+        flyChips(s.querySelector('.avatar'), $('#pot'), Math.min(6, 1+Math.floor(ev.amount/50))); SFX.chip();
       }
       if(ev.action==='all_in'){ // others react
         STATE.players.filter(o=>o.seat!==ev.seat && !o.human && !o.folded).slice(0,2).forEach((o,k)=>setTimeout(()=>emojiAt(o.seat, ['😱','👀','😬'][k%3]),250*k));
@@ -619,7 +654,7 @@ async function replay(events, st, peek){
       setTurn(-1);
       $$('.betchip').forEach(b=>b.textContent='');
       const prev=shownBoard.length; shownBoard=ev.board;
-      renderBoard(shownBoard, prev); $('#street').textContent=ev.street;
+      renderBoard(shownBoard, prev); $('#street').textContent=ev.street; SFX.flip();
       log(ev.street.toUpperCase()+': '+ev.board.map(prettyCard).join(' '),'st');
       await sleep(speed()*1.1);
     } else if(ev.type==='hand_over'){
@@ -633,6 +668,7 @@ async function replay(events, st, peek){
       log(`🏆 ${names}${hand?' with '+hand:''}`,'st');
       const humanWon = won.some(([s])=>STATE.players[+s]?.human);
       if(humanWon) confetti(120); else if(ev.pot>=300) confetti(40);
+      if(humanWon) SFX.win(); else SFX.chip();
       won.forEach(([s])=>{ if(!STATE.players[+s]?.human) setTimeout(()=>emojiAt(+s,'😎'),300); });
       // a loser grumbles
       const losers = STATE.players.filter(p=>!p.human && !p.out && !won.some(([s])=>+s===p.seat));
