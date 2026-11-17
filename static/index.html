@@ -32,8 +32,24 @@ button.ghost{background:transparent}
 .play{display:grid;grid-template-columns:1fr 340px;gap:16px}
 .controls{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center}
 .picker{display:flex;gap:6px;flex-wrap:wrap}
-.pchip{padding:6px 10px;border-radius:999px;border:1px solid var(--line);cursor:pointer;font-size:13px;user-select:none;background:var(--panel)}
-.pchip.on{border-color:var(--gold);background:#2a2412}
+.btngroup{display:inline-flex}
+.btngroup button{border-radius:0;margin-left:-1px}
+.btngroup button:first-child{border-radius:8px 0 0 8px;margin-left:0}
+.btngroup button:last-child{border-radius:0 8px 8px 0}
+.btngroup button:only-child{border-radius:8px}
+.controls .spacer{flex:1}
+.ddwrap{position:relative}
+.ddwrap .count{background:#0d131a;border-radius:999px;padding:0 7px;font-size:12px;color:var(--gold)}
+.dd{display:none;position:absolute;top:calc(100% + 6px);left:0;z-index:60;width:260px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px;box-shadow:0 14px 40px rgba(0,0,0,.55)}
+.dd.open{display:block}
+.ddhead{font-size:12px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);margin-bottom:6px}
+.ddfoot{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:8px;padding-top:8px;border-top:1px solid var(--line)}
+.ddfoot .muted{font-size:11px}
+.prow{display:flex;align-items:center;gap:10px;padding:6px;border-radius:8px;cursor:pointer;user-select:none}
+.prow:hover{background:var(--panel2)}
+.prow input{width:16px;height:16px;accent-color:var(--gold);cursor:pointer}
+.prow .pav{width:30px;height:30px;border-radius:50%;background:var(--panel2);position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;font-size:16px;flex:none}
+.prow .pav img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 .tablewrap{position:relative;height:560px;margin-top:10px}
 .table{position:absolute;inset:60px 70px 50px 70px;border-radius:999px;background:radial-gradient(ellipse at center,#14784c 0%,var(--felt) 45%,var(--felt2) 100%);box-shadow:0 0 0 14px var(--rail),0 0 0 16px #5a3a24,0 25px 60px rgba(0,0,0,.6),inset 0 0 80px rgba(0,0,0,.45)}
 .table::after{content:"DREX";position:absolute;left:50%;top:62%;transform:translateX(-50%);font-weight:900;font-size:44px;letter-spacing:12px;color:rgba(255,255,255,.05)}
@@ -190,7 +206,7 @@ input.codein{text-transform:uppercase;letter-spacing:6px;font-size:20px;font-wei
 .err{color:var(--red);margin-top:10px;min-height:18px;font-weight:600}
 button.online{border-color:#2e4a35;background:#17281e}
 body.online #btnDemo,body.online #btnWatch,body.online #btnOnline{display:none}
-body.online:not(.host) #picker,body.online:not(.host) #oppLabel{display:none}
+body.online:not(.host) #playersWrap{display:none}
 @media (max-width:640px){.ongrid{grid-template-columns:1fr}.tablewrap{height:480px}}
 </style>
 </head>
@@ -217,14 +233,27 @@ body.online:not(.host) #picker,body.online:not(.host) #oppLabel{display:none}
         <button class="ghost" id="btnLeave">Leave room</button>
       </div>
       <div class="controls">
-        <span class="muted" id="oppLabel">Opponents:</span>
-        <div class="picker" id="picker"></div>
-        <button class="primary" id="btnNew">New game</button>
+        <div class="ddwrap" id="playersWrap">
+          <button id="btnPlayers" aria-expanded="false">👥 Players <span class="count" id="playersCount"></span> ▾</button>
+          <div class="dd" id="playersPanel">
+            <div class="ddhead">Bots at your table</div>
+            <div id="picker"></div>
+            <div class="ddfoot"><span class="muted" id="playersNote">Changes apply on the next New game</span><button class="primary" id="btnPlayersDone">Done</button></div>
+          </div>
+        </div>
+        <div class="btngroup">
+          <button class="primary" id="btnNew">New game</button>
+          <button id="btnNext" disabled>Next hand ▶</button>
+        </div>
+        <div class="btngroup" id="toolsGroup">
+          <button id="btnPeek" disabled>🧠 Brain-peek</button>
+        </div>
+        <div class="spacer"></div>
+        <div class="btngroup">
+          <button id="btnDemo" title="Rigged deal: Manipulator vs the bluffing Risk-Taker">⭐ Demo</button>
+          <button id="btnWatch">👀 Watch bots</button>
+        </div>
         <button class="online" id="btnOnline" title="Get a code, send it to friends, play at the same table">🌐 Play online</button>
-        <button id="btnDemo" title="Rigged deal: Manipulator vs the bluffing Risk-Taker">⭐ Demo hand</button>
-        <button id="btnWatch">👀 Watch bots</button>
-        <button id="btnNext" disabled>Next hand ▶</button>
-        <button id="btnPeek" disabled>🧠 Brain-peek</button>
       </div>
       <div class="tablewrap" id="tablewrap">
         <div class="table"></div>
@@ -378,14 +407,25 @@ $$('.tab').forEach(t=>t.onclick=()=>{
 // ---------- picker ----------
 function renderPicker(){
   $('#picker').innerHTML = ['risk_taker','conservative','statistician','manipulator','wildcard'].concat(LLM_LIVE?['llm_bot']:[]).map(k=>
-    `<span class="pchip ${chosen.includes(k)?'on':''}" data-k="${k}">${PERS[k].emoji} ${PERS[k].name}</span>`).join('');
-  $$('.pchip').forEach(c=>c.onclick=()=>{
+    `<label class="prow"><input type="checkbox" data-k="${k}" ${chosen.includes(k)?'checked':''}>
+      <span class="pav">${PERS[k].emoji}<img src="/static/avatars/${k}.png" alt="" onerror="this.remove()"></span>${PERS[k].name}</label>`).join('');
+  $$('#picker input').forEach(c=>c.onchange=()=>{
     const k=c.dataset.k;
-    if(chosen.includes(k)){ if(chosen.length>1) chosen=chosen.filter(x=>x!==k); }
-    else chosen.push(k);
-    renderPicker();
+    if(c.checked){ if(!chosen.includes(k)) chosen.push(k); }
+    else if(chosen.length>1) chosen=chosen.filter(x=>x!==k);
+    else c.checked=true;  // keep at least one opponent
+    $('#playersCount').textContent=chosen.length;
   });
+  $('#playersCount').textContent=chosen.length;
+  $('#playersNote').textContent = ONLINE ? 'Applies when you press New game' : 'Changes apply on the next New game';
 }
+function togglePlayers(open){
+  $('#playersPanel').classList.toggle('open', open);
+  $('#btnPlayers').setAttribute('aria-expanded', open);
+}
+$('#btnPlayers').onclick=e=>{ e.stopPropagation(); togglePlayers(!$('#playersPanel').classList.contains('open')); };
+$('#btnPlayersDone').onclick=()=>togglePlayers(false);
+document.addEventListener('click',e=>{ if(!$('#playersWrap').contains(e.target)) togglePlayers(false); });
 
 // ---------- cards ----------
 function cardHTML(c, cls=''){
