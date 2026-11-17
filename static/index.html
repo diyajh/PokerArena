@@ -191,11 +191,9 @@ pre.ndi{font-size:11px;background:#0d131a;padding:8px;border-radius:8px;max-heig
 .help h4{color:var(--gold);margin:12px 0 6px;font-size:14px}
 .help ul{margin:0 0 6px 18px;display:flex;flex-direction:column;gap:6px;line-height:1.45}
 button.on{border-color:var(--gold);color:var(--gold);background:#2a2412}
-.tmove{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin-bottom:8px;font-size:12px}
-.tmove.good{border-left:4px solid var(--green)}.tmove.diff{border-left:4px solid var(--gold)}
-.tmove .th{display:flex;justify-content:space-between;gap:6px;font-weight:700;font-size:13px;margin-bottom:4px}
-.tmove .tn{color:var(--muted);margin:3px 0}
-.tmove .tl{color:var(--text);line-height:1.45}
+.tline{font-size:13px;line-height:1.45;padding:5px 0;border-bottom:1px dashed var(--line)}
+.tline:last-child{border-bottom:0}
+.tline .muted{font-size:11px}
 .pstat{display:flex;justify-content:space-between;font-size:12px;padding:3px 0}
 .pstyle{font-size:16px;font-weight:800;color:var(--gold);margin-bottom:6px}
 @media (max-width:1100px){.play,.arena{grid-template-columns:1fr}}
@@ -850,19 +848,31 @@ window.addEventListener('keydown',e=>{
 let TEACH=false; try{ TEACH = localStorage.getItem('drexTeach')==='1'; }catch(e){}
 const RAISES=['raise_half_pot','raise_pot','all_in'];
 const SRC_LABEL={drex:'Drex', fallback:'Fallback brain (the Drex call failed)', local:'Local estimate (Drex not connected)'};
-function teachSentence(d){
-  const c=d.coach, eq=Math.round(d.equity*100), did=d.choice, free=!d.to_call;
-  const po=Math.round(c.pot_odds*100), top=c.top;
-  if(did==='fold' && free) return `You folded when checking was free. Checking costs nothing, so checking was better.`;
-  if(did==='fold' && eq>=po) return `You folded with ${eq}% to win, but the pot odds only needed ${po}%, so calling was better.`;
-  if(did==='fold') return `You folded with ${eq}% to win against ${po}% pot odds. Good fold: calling loses chips over time.`;
-  if(did==='check_call' && !free && eq<po) return `You called with ${eq}% to win and ${po}% pot odds, so folding was better.`;
-  if(did==='check_call' && !free) return `You called with ${eq}% to win and only needed ${po}% (the pot odds), so calling was right.`;
-  if(did==='check_call' && RAISES.includes(top) && eq>=55) return `You checked with ${eq}% to win. With a hand that strong, raising makes them pay to see more cards.`;
-  if(did==='check_call') return `You checked with ${eq}% to win: a free look at the next card, no risk.`;
-  if(eq<35) return `You raised with only ${eq}% to win, so that was a bluff. It only pays off if they fold often.`;
-  if(eq>=55) return `You raised with ${eq}% to win: betting strong hands builds the pot for you.`;
-  return `You raised with ${eq}% to win, a middling hand. If they call, you're risking a lot.`;
+// one line per move: "Flop: You called. Drex: Call (76%). ✅ Good, 42% to win beats the 25% pot odds."
+const cap1 = s => s[0].toUpperCase()+s.slice(1);
+function moveName(a, free){ return a==='check_call' ? (free?'Check':'Call') : ALABEL[a]; }
+function youDid(a, free){
+  return {fold:'folded', check_call: free?'checked':'called', raise_half_pot:'raised ½ pot', raise_pot:'raised the pot', all_in:'went all-in'}[a];
+}
+function teachReason(d){
+  const c=d.coach, eq=Math.round(d.equity*100), po=Math.round(c.pot_odds*100), did=d.choice, free=!d.to_call;
+  const river = d.street==='river';
+  if(did==='fold' && free) return 'Checking was free.';
+  if(did==='fold') return eq>=po ? `${eq}% to win beats the ${po}% pot odds, calling was better.` : `${eq}% to win is below the ${po}% pot odds.`;
+  if(did==='check_call' && !free) return eq>=po ? `${eq}% to win beats the ${po}% pot odds.` : `${eq}% to win is below the ${po}% pot odds, folding was better.`;
+  if(did==='check_call' && RAISES.includes(c.top) && eq>=55) return `${eq}% to win, a raise builds the pot.`;
+  if(did==='check_call') return river ? 'Free showdown, no risk.' : 'Free look at the next card, no risk.';
+  if(eq<35) return `${eq}% to win, so that's a bluff.`;
+  return eq>=55 ? `${eq}% to win, betting builds the pot.` : `${eq}% to win, a risky raise.`;
+}
+function teachLine(d){
+  const free=!d.to_call, head=`${cap1(d.street)}: You ${youDid(d.choice, free)}.`;
+  if(!d.coach) return `${head} <span class="muted">(timer ran out)</span>`;
+  const c=d.coach, same=c.top===d.choice, pct=Math.round((c.probs[c.top]||0)*100);
+  let why=teachReason(d);
+  if(same && /^\d/.test(why)) why='Good, '+why;
+  const est = c.source==='drex' ? '' : ' <span class="muted">(estimate)</span>';
+  return `${head} Drex: ${moveName(c.top, free)} (${pct}%). ${same?'✅':'⚠️'} ${why}${est}`;
 }
 function renderTeach(){
   $('#btnTeach').classList.toggle('on', TEACH);
@@ -873,15 +883,7 @@ function renderTeach(){
   const mine = (PEEK?.decisions||[]).filter(d=>d.source==='human' && me && d.seat===me.seat);
   $('#teachMeta').textContent = mine.length ? `${mine.length} move${mine.length>1?'s':''}` : '';
   if(!mine.length){ $('#teach').innerHTML='<div class="muted">You made no moves this hand.</div>'; return; }
-  $('#teach').innerHTML = mine.map(d=>{
-    if(!d.coach) return `<div class="tmove"><div class="th"><span>${d.street}: ${ALABEL[d.choice]}</span></div>
-      <div class="tl">No advice recorded for this move (it was made for you when your timer ran out).</div></div>`;
-    const c=d.coach, same=c.top===d.choice, pTop=Math.round((c.probs[c.top]||0)*100), pDid=Math.round((c.probs[d.choice]||0)*100);
-    return `<div class="tmove ${same?'good':'diff'}">
-      <div class="th"><span>${d.street}: you chose ${ALABEL[d.choice]}</span><span>${same?'✅ matched':'🤔 different'}</span></div>
-      <div class="tn">${SRC_LABEL[c.source]||c.source} recommended <b>${ALABEL[c.top]}</b> (${pTop}%)${same?'':`, your move ${pDid}%`} · win chance ${Math.round(d.equity*100)}% · pot odds ${Math.round(c.pot_odds*100)}%</div>
-      <div class="tl">${teachSentence(d)}</div></div>`;
-  }).join('');
+  $('#teach').innerHTML = mine.map(d=>`<div class="tline">${teachLine(d)}</div>`).join('');
 }
 $('#btnTeach').onclick=()=>{ TEACH=!TEACH; try{ localStorage.setItem('drexTeach', TEACH?'1':'0'); }catch(e){} renderTeach(); };
 
