@@ -192,12 +192,29 @@ def after_hand(g):
     save_profile(g, style)
 
 
+def coach_for(g, p):
+    """Drex's advice for your current decision. Cached per decision so the coach bars and the
+    Teach me review share one Drex call."""
+    key = (g.hand_no, len(g.decisions), g.street, p.seat)
+    cached = getattr(g, "last_coach", None)
+    if cached and cached[0] == key:
+        return cached[1]
+    c = BRAIN.coach(g, p)
+    g.last_coach = (key, c)
+    return c
+
+
+def teach_note(c):
+    """The part of the coach's advice the Teach me review needs."""
+    return {"probs": c["probs"], "top": c["top"], "source": c["source"],
+            "equity": c["equity"], "pot_odds": c["pot_odds"]} if c else None
+
+
 def respond(extra=None):
     g = GAME
     out = {"state": serialize(g), "events": g.pop_events()}
     if not g.hand_over and g.to_act is not None and g.players[g.to_act].human:
-        p = g.players[g.to_act]
-        out["coach"] = BRAIN.coach(g, p)
+        out["coach"] = coach_for(g, g.players[g.to_act])
     if g.hand_over:
         after_hand(g)
         out["commentary"] = getattr(g, "commentary", None)
@@ -294,12 +311,14 @@ def api_action():
         return jsonify({"error": "not your turn"}), 400
     if action not in g.legal(p):
         return jsonify({"error": f"illegal action {action}"}), 400
+    coach = coach_for(g, p)  # same advice the coach bars showed you (cached, no extra Drex call)
     eq = win_chance(p.hole, g.board, len(g.in_hand()) - 1, runs=150, rng=g.rng)
     if action in RAISE_ACTIONS:  # remember your equity so bots can catch YOUR bluffs
         g.raised_equities.setdefault(p.seat, []).append(eq)
     g.decisions.append({"seat": p.seat, "name": "You", "personality": "human", "street": g.street,
                         "choice": action, "to_call": g.to_call(p), "equity": eq, "hole": cards_str(p.hole),
-                        "probs": None, "source": "human", "ms": 0, "why": "Your move", "evidence": []})
+                        "probs": None, "source": "human", "ms": 0, "why": "Your move", "evidence": [],
+                        "coach": teach_note(coach)})
     g.apply(p, action)
     g.run_bots()
     return respond()

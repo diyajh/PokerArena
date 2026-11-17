@@ -206,12 +206,16 @@ class Room:
 
     def _human_move(self, p, action):
         g = self.game
+        # the advice this player's coach bars showed (cached when they polled); None after a timeout
+        coach = self.coach_cache.get((g.hand_no, len(g.decisions), g.street))
         eq = win_chance(p.hole, g.board, len(g.in_hand()) - 1, runs=150, rng=g.rng)
         if action in RAISE_ACTIONS:
             g.raised_equities.setdefault(p.seat, []).append(eq)
         g.decisions.append({"seat": p.seat, "name": p.name, "personality": "human", "street": g.street,
                             "choice": action, "to_call": g.to_call(p), "equity": eq, "hole": cards_str(p.hole),
-                            "probs": None, "source": "human", "ms": 0, "why": "Human move", "evidence": []})
+                            "probs": None, "source": "human", "ms": 0, "why": "Human move", "evidence": [],
+                            "coach": {k: coach[k] for k in ("probs", "top", "source", "equity", "pot_odds")}
+                            if coach else None})
         g.apply(p, action)
         self._drain()
         if g.hand_over:
