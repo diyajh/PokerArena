@@ -41,7 +41,8 @@ class Player:
         self.hole = []
         self.folded = False
         self.all_in = False
-        self.out = self.chips <= 0
+        # out of this hand: broke, or an online player who stepped away from the table
+        self.out = self.chips <= 0 or getattr(self, "away", False)
         if self.out:
             self.folded = True
         self.bet = 0       # this betting round

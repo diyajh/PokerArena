@@ -17,6 +17,7 @@ You play Texas Hold'em against AI bots, or watch them play each other. Every bot
 
 ## Features
 - **💡 Coach bars:** Drex's odds for your own moves
+- **🌐 Play online with friends:** create a room, send the 4-letter code, and up to 5 people play at one table (Drex bots fill the empty seats). Everyone sees only their own cards, and chips carry over between games
 - **🧠 Brain-peek:** after each hand, see every bot's cards, Drex's probabilities, the reason for each move, and decision time
 - **🎙️ Drex Commentator:** Drex calls out the play of the hand (bluff, hero call, smart fold…)
 - **🧠 The bots remember you:** Drex labels your style (e.g. "Calling station"), and the bots adapt to it
@@ -36,5 +37,17 @@ pip install -r requirements.txt
 cp .env.example .env    # add DREX_API_KEY (and NDI_API_KEY for uploads)
 python app.py           # → http://localhost:5050
 ```
+
+## Play online
+1. Click **🌐 Play online**, type your name and click **Create room**. You get a code like `K7QX`.
+2. Send friends the code, or click **🔗 Copy invite** and send the link.
+3. They open the site, click **🌐 Play online**, and join with the code.
+4. The host picks bots under **Opponents** and presses **▶ Start game**.
+
+- **Next hand:** anyone can press it when a hand ends (it deals by itself after 25 s).
+- **New game:** host only. Everyone keeps their chips; only players at 0 start over at 1000. A player at 0 can also press **New game (get 1000)** for themselves.
+- Chips are saved by name in `online_chips.json`, so leaving and rejoining keeps them.
+- If it's your turn and you don't act in 45 s, you check (or fold if you'd have to pay).
+- Friends on the same Wi-Fi use `http://<your-computer's-IP>:5050`. For friends elsewhere, put the server online (e.g. a tunnel such as `cloudflared tunnel --url http://localhost:5050`, or a host like Render).
 
 Built with Drex, NDI, Adobe Firefly (bot avatars), Python and Flask.

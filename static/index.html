@@ -170,6 +170,28 @@ pre.ndi{font-size:11px;background:#0d131a;padding:8px;border-radius:8px;max-heig
 .pstat{display:flex;justify-content:space-between;font-size:12px;padding:3px 0}
 .pstyle{font-size:16px;font-weight:800;color:var(--gold);margin-bottom:6px}
 @media (max-width:1100px){.play,.arena{grid-template-columns:1fr}}
+
+/* ---------- ONLINE ---------- */
+.roombar{display:none;gap:12px;align-items:center;flex-wrap:wrap;background:linear-gradient(90deg,#16202b,#18291f);border:1px solid #2e4a35;border-radius:12px;padding:8px 12px;margin-bottom:10px}
+body.online .roombar{display:flex}
+.rcode{display:flex;flex-direction:column;line-height:1.1}
+.rcode b{font-size:24px;letter-spacing:5px;color:var(--gold);font-family:ui-monospace,Consolas,monospace}
+.people{display:flex;gap:6px;flex-wrap:wrap;flex:1}
+.person{font-size:12px;padding:3px 9px;border-radius:999px;background:var(--panel2);border:1px solid var(--line)}
+.person.away{opacity:.45}
+.person.me{border-color:#3d5266}
+.person.turn{border-color:var(--gold);color:var(--gold)}
+.turnclock{font-weight:700;color:var(--gold);font-variant-numeric:tabular-nums}
+input[type=text]{background:#0d131a;border:1px solid var(--line);color:var(--text);padding:9px 11px;border-radius:8px;font:inherit;width:100%}
+input.codein{text-transform:uppercase;letter-spacing:6px;font-size:20px;font-weight:800;text-align:center;font-family:ui-monospace,Consolas,monospace}
+.modal .box.small{max-width:640px;margin-top:6vh}
+.ongrid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}
+.ongrid .panel{display:flex;flex-direction:column;gap:10px}
+.err{color:var(--red);margin-top:10px;min-height:18px;font-weight:600}
+button.online{border-color:#2e4a35;background:#17281e}
+body.online #btnDemo,body.online #btnWatch,body.online #btnOnline{display:none}
+body.online:not(.host) #picker,body.online:not(.host) #oppLabel{display:none}
+@media (max-width:640px){.ongrid{grid-template-columns:1fr}.tablewrap{height:480px}}
 </style>
 </head>
 <body>
@@ -187,10 +209,18 @@ pre.ndi{font-size:11px;background:#0d131a;padding:8px;border-radius:8px;max-heig
 <section class="page active" id="page-play">
   <div class="play">
     <div>
+      <div class="roombar" id="roombar">
+        <div class="rcode"><span class="muted">Room code</span><b id="roomCode">----</b></div>
+        <button id="btnCopyLink" title="Send this to friends so they can join">🔗 Copy invite</button>
+        <div class="people" id="roomPeople"></div>
+        <span class="turnclock" id="roomTurn"></span>
+        <button class="ghost" id="btnLeave">Leave room</button>
+      </div>
       <div class="controls">
-        <span class="muted">Opponents:</span>
+        <span class="muted" id="oppLabel">Opponents:</span>
         <div class="picker" id="picker"></div>
         <button class="primary" id="btnNew">New game</button>
+        <button class="online" id="btnOnline" title="Get a code, send it to friends, play at the same table">🌐 Play online</button>
         <button id="btnDemo" title="Rigged deal: Manipulator vs the bluffing Risk-Taker">⭐ Demo hand</button>
         <button id="btnWatch">👀 Watch bots</button>
         <button id="btnNext" disabled>Next hand ▶</button>
@@ -285,6 +315,28 @@ pre.ndi{font-size:11px;background:#0d131a;padding:8px;border-radius:8px;max-heig
   </div>
 </section>
 
+<!-- Online: create or join a room -->
+<div class="modal" id="onlineModal">
+  <div class="box small">
+    <h2>🌐 Play online with friends <button class="ghost" id="closeOnline">✕</button></h2>
+    <div class="muted" style="margin-bottom:6px">Your name</div>
+    <input type="text" id="onName" maxlength="16" placeholder="e.g. Jada">
+    <div class="ongrid">
+      <div class="panel">
+        <h3>Start a table</h3>
+        <div class="muted">You get a 4-letter code to send your friends (up to 5 people). The bots you picked under <b>Opponents</b> fill the empty seats.</div>
+        <button class="primary" id="btnCreate">Create room</button>
+      </div>
+      <div class="panel">
+        <h3>Join a friend</h3>
+        <input type="text" class="codein" id="onCode" maxlength="4" placeholder="CODE" autocomplete="off">
+        <button class="primary" id="btnJoin">Join room</button>
+      </div>
+    </div>
+    <div class="err" id="onErr"></div>
+  </div>
+</div>
+
 <!-- Brain-peek modal -->
 <div class="modal" id="peekModal">
   <div class="box">
@@ -352,15 +404,16 @@ function seatPos(i,n){
 }
 function avatarHTML(p){
   const e = p.emoji || (PERS[p.personality]||{}).emoji || '🙂';
-  const img = p.human ? '' : `<img src="/static/avatars/${p.personality}.png" onerror="this.remove()">`;
+  const img = (p.human||p.person) ? '' : `<img src="/static/avatars/${p.personality}.png" onerror="this.remove()">`;
   return `<div class="avatar">${e}${img}</div>`;
 }
 function renderSeats(st, opts={}){
   $$('.seat').forEach(s=>s.remove());
   const n=st.players.length, wrap=$('#tablewrap');
   const winners = st.hand_over && st.result ? Object.keys(st.result.won).map(Number) : [];
+  const meIdx = Math.max(0, st.players.findIndex(p=>p.human));  // you always sit at the bottom
   st.players.forEach((p,i)=>{
-    const pos=seatPos(i,n);
+    const pos=seatPos((i-meIdx+n)%n,n);
     const d=document.createElement('div');
     d.className='seat'+(p.folded&&!p.out?' folded':'')+(p.out?' out':'')+(st.to_act===p.seat?' turn':'')+(winners.includes(p.seat)?' winner':'');
     d.id='seat-'+p.seat;
@@ -496,6 +549,10 @@ async function replay(events, st, peek){
       const losers = STATE.players.filter(p=>!p.human && !p.out && !won.some(([s])=>+s===p.seat));
       if(losers.length && Math.random()<.6) setTimeout(()=>emojiAt(losers[Math.floor(Math.random()*losers.length)].seat, ['😤','🙄','😭'][Math.floor(Math.random()*3)]),600);
       await sleep(400);
+    } else if(ev.type==='system'){
+      log(`<i>${ev.text}</i>`);
+    } else if(ev.type==='react'){
+      emojiAt(ev.seat, ev.emoji);
     } else if(ev.type==='game_over'){
       banner(`Game over · ${ev.winner||''} wins`);
     }
@@ -594,15 +651,28 @@ $('#closePeek').onclick=()=>$('#peekModal').classList.remove('open');
 $('#peekModal').onclick=e=>{ if(e.target.id==='peekModal') $('#peekModal').classList.remove('open'); };
 
 // ---------- controls ----------
-async function act(a){ if(busy) return; try{ setActions(null); await handle(await api('/api/action',{action:a})); }catch(e){ alert(e.message); busy=false; } }
+async function act(a){
+  if(busy) return;
+  if(ONLINE){ setActions(null); try{ await roomApi('action',{action:a}); }catch(e){ alert(e.message); } return poll(); }
+  try{ setActions(null); await handle(await api('/api/action',{action:a})); }catch(e){ alert(e.message); busy=false; }
+}
 $$('#actions button').forEach(b=>b.onclick=()=>act(b.dataset.a));
-async function next(){ if(busy) return; try{ await handle(await api('/api/next_hand',{})); }catch(e){ console.error(e); busy=false; } }
+async function next(){
+  if(busy) return;
+  if(ONLINE){ try{ await roomApi('next_hand'); }catch(e){} return poll(); }
+  try{ await handle(await api('/api/next_hand',{})); }catch(e){ console.error(e); busy=false; }
+}
 $('#btnNext').onclick=next;
 async function newGame(restart){
   if(busy) return; watching=false; updateWatchBtn();
   await handle(await api('/api/new_game',{mode:'play',bots:chosen,restart:!!restart}));
 }
-$('#btnNew').onclick=()=>{
+$('#btnNew').onclick=async()=>{
+  if(ONLINE){  // host: start / new game (chips carry over). At 0 chips: get a fresh 1000.
+    try{ if(ROOM?.can_rebuy && !(ROOM.host && STATE?.hand_over)) await roomApi('rebuy'); else await roomApi('start',{bots:chosen}); }
+    catch(e){ alert(e.message); }
+    return poll();
+  }
   if(STATE?.can_resume) return newGame(false);  // back to your game, chips intact
   newGame(true);  // fresh table, everyone keeps their chips (busted players rebuy 1000)
 };
@@ -615,6 +685,7 @@ $('#btnWatch').onclick=async()=>{
   await handle(await api('/api/new_game',{mode:'watch'}));
 };
 $$('#reactions button').forEach(b=>b.onclick=()=>{
+  if(ONLINE){ roomApi('react',{emoji:b.textContent}).then(poll).catch(()=>{}); return; }  // everyone sees it
   const me = STATE?.players.find(p=>p.human); if(!me) return;
   emojiAt(me.seat, b.textContent);
   // a bot reacts back sometimes
@@ -758,11 +829,105 @@ $('#btnEvo').onclick=async()=>{
 $('#btnEvoReplay').onclick=()=>{ if(EVO) renderEvo(EVO,true); };
 (async()=>{ try{ const L=await api('/api/last_results'); if(L.evolution) renderEvo(L.evolution,false); }catch(e){} })();
 
+// ---------- 🌐 online rooms ----------
+// The server keeps an event log per room; every browser polls for the events after the last one it saw
+// and replays them with the same animations as single-player.
+let ONLINE=null, ROOM=null, lastId=0, firstPoll=true, polling=false, pollTimer=null;
+function roomApi(path, body={}){ return api('/api/room/'+path, {...body, code:ONLINE.code, token:ONLINE.token}); }
+function saveOnline(){ try{ ONLINE ? localStorage.setItem('drexOnline', JSON.stringify(ONLINE)) : localStorage.removeItem('drexOnline'); }catch(e){} }
+function loadOnline(){ try{ return JSON.parse(localStorage.getItem('drexOnline')||'null'); }catch(e){ return null; } }
+function inviteLink(){ return `${location.origin}/?room=${ONLINE.code}`; }
+
+function enterRoom(code, token, name){
+  ONLINE={code, token, name}; saveOnline();
+  lastId=0; firstPoll=true; watching=false; updateWatchBtn(); STATE=null;
+  history.replaceState(null,'','?room='+code);
+  document.body.classList.add('online');
+  $('#roomCode').textContent=code;
+  $('#log').innerHTML=''; $$('.seat,.banner,.caption').forEach(s=>s.remove()); renderBoard([]); setActions(null);
+  $('#onlineModal').classList.remove('open');
+  clearInterval(pollTimer); pollTimer=setInterval(poll, 900); poll();
+}
+function exitRoom(){
+  clearInterval(pollTimer); ONLINE=null; ROOM=null; saveOnline();
+  document.body.classList.remove('online','host'); history.replaceState(null,'','/');
+  $$('.seat,.banner,.caption').forEach(s=>s.remove()); $('#log').innerHTML='';
+  bootSingle();
+}
+async function poll(){
+  if(!ONLINE || busy || polling) return;
+  polling=true;
+  try{
+    const res = await api(`/api/room/poll?code=${ONLINE.code}&token=${encodeURIComponent(ONLINE.token)}&since=${lastId}`);
+    ROOM=res.room;
+    if(firstPoll){ res.events=[]; firstPoll=false; }  // just arrived: show the table as it is, don't replay old hands
+    lastId=res.last_id;
+    if(!res.state){ renderLobby(); }
+    else if(res.events.length || !STATE || STATE.mode!=='online'){
+      await handle(res);
+      $('#btnPeek').disabled = !PEEK;
+    }
+    renderRoom();
+  }catch(e){
+    if(/not in this room|No room/.test(e.message)){ alert(e.message); exitRoom(); }
+  }finally{ polling=false; }
+}
+function renderRoom(){
+  if(!ROOM) return;
+  document.body.classList.toggle('host', ROOM.host);
+  const turnName = STATE && !STATE.hand_over && STATE.to_act!=null ? STATE.players[STATE.to_act]?.name : null;
+  $('#roomPeople').innerHTML = ROOM.people.map(p=>
+    `<span class="person ${p.away?'away':''} ${p.name===ROOM.me?'me':''} ${p.name===turnName?'turn':''}">${p.host?'👑 ':''}${p.name}${p.name===ROOM.me?' (you)':''}${p.away?' · away':''}</span>`).join('');
+  $('#roomTurn').textContent = turnName ? `⏱ ${turnName}: ${ROOM.turn_left}s` : '';
+  const over = !STATE || STATE.hand_over;
+  // Next hand: anyone, once the hand is over. New game: the host. At 0 chips: get 1000 back.
+  $('#btnNext').disabled = !STATE || !STATE.hand_over;
+  if(ROOM.can_rebuy && !(ROOM.host && over)){ $('#btnNew').textContent='New game (get 1000)'; $('#btnNew').disabled=false; }
+  else if(ROOM.host){ $('#btnNew').textContent = ROOM.started ? 'New game' : '▶ Start game'; $('#btnNew').disabled = !over; }
+  else { $('#btnNew').textContent='New game'; $('#btnNew').disabled=true; $('#btnNew').title='Only the host can start a new game'; }
+}
+function renderLobby(){
+  const host = ROOM.people.find(p=>p.host)?.name || 'the host';
+  const bots = ROOM.host ? 'Pick bots under Opponents, then press ▶ Start game.' : `Waiting for ${host} to start…`;
+  const html=`🌐 Room <b>${ROOM.code}</b> · ${ROOM.people.length} player${ROOM.people.length>1?'s':''} here<br><small>${bots}</small>`;
+  if($('.banner')?.innerHTML!==html) banner(html);
+}
+
+$('#btnOnline').onclick=()=>{ $('#onErr').textContent=''; $('#onlineModal').classList.add('open'); $('#onName').focus(); };
+$('#closeOnline').onclick=()=>$('#onlineModal').classList.remove('open');
+function onlineName(){ const n=$('#onName').value.trim(); try{ localStorage.setItem('drexName', n); }catch(e){} return n; }
+$('#btnCreate').onclick=async()=>{
+  const name=onlineName(); if(!name){ $('#onErr').textContent='Type your name first'; return; }
+  try{ const r=await api('/api/room/create',{name, bots:chosen}); enterRoom(r.code, r.token, name); }
+  catch(e){ $('#onErr').textContent=e.message; }
+};
+$('#btnJoin').onclick=async()=>{
+  const name=onlineName(), code=$('#onCode').value.trim().toUpperCase();
+  if(!name){ $('#onErr').textContent='Type your name first'; return; }
+  if(code.length!==4){ $('#onErr').textContent='The code has 4 letters'; return; }
+  const saved=loadOnline();
+  try{ const r=await api('/api/room/join',{code, name, token: saved?.code===code ? saved.token : undefined}); enterRoom(r.code, r.token, name); }
+  catch(e){ $('#onErr').textContent=e.message; }
+};
+$('#onCode').addEventListener('keydown',e=>{ if(e.key==='Enter') $('#btnJoin').click(); });
+$('#btnCopyLink').onclick=async()=>{
+  const link=inviteLink();
+  try{ await navigator.clipboard.writeText(link); $('#btnCopyLink').textContent='✅ Copied!'; setTimeout(()=>$('#btnCopyLink').textContent='🔗 Copy invite',1500); }
+  catch(e){ prompt('Send this link to your friends:', link); }  // clipboard is blocked on plain http
+};
+$('#btnLeave').onclick=async()=>{ if(!confirm('Leave this room? Your chips are saved under your name.')) return; try{ await roomApi('leave'); }catch(e){} exitRoom(); };
+
 // ---------- boot ----------
+async function bootSingle(){ await handle(await api('/api/new_game',{mode:'play',bots:chosen})); }
 renderPicker();
 (async()=>{
   try{ const r=await api('/api/personalities'); LLM_LIVE=!!r.llm_live; LLM_MODEL=r.llm_model||''; renderPicker(); if(LLM_LIVE){ $('#benchHands').value=30; } $('#drexBadge').className='badge '+(r.drex_live?'live':'local'); $('#drexBadge').textContent = r.drex_live?'Drex: LIVE':'Drex: local fallback brain'; }catch(e){}
-  await handle(await api('/api/new_game',{mode:'play',bots:chosen}));
+  try{ $('#onName').value = localStorage.getItem('drexName')||''; }catch(e){}
+  const code = (new URLSearchParams(location.search).get('room')||'').toUpperCase();
+  const saved = loadOnline();
+  if(saved && (!code || saved.code===code)){ enterRoom(saved.code, saved.token, saved.name); return; }  // refreshed the page
+  await bootSingle();
+  if(code){ $('#onCode').value=code; $('#btnOnline').click(); }  // opened an invite link
 })();
 </script>
 </body>

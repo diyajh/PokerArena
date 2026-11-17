@@ -628,6 +628,102 @@ def api_upload_history():
                     "seconds": round(time.perf_counter() - t0, 1)})
 
 
+# ---------------- 🌐 Online rooms (share a code, play together) ----------------
+import rooms  # noqa: E402
+
+
+def room_call(fn):
+    """Run fn(room, body) under the room's lock; turn errors into a JSON message the page can show."""
+    body = request.get_json(silent=True) or {}
+    try:
+        room = rooms.get_room(body.get("code") or request.args.get("code"))
+        with room.lock:
+            token = body.get("token") or request.args.get("token")
+            if token not in room.seats:
+                return jsonify({"error": "You're not in this room. Join it again with the code."}), 403
+            return jsonify(fn(room, token, body))
+    except KeyError as e:
+        return jsonify({"error": e.args[0]}), 404
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.post("/api/room/create")
+def api_room_create():
+    body = request.get_json(silent=True) or {}
+    room, token = rooms.create_room(body.get("name"), body.get("bots") or ["statistician", "manipulator"])
+    return jsonify({"code": room.code, "token": token})
+
+
+@app.post("/api/room/join")
+def api_room_join():
+    body = request.get_json(silent=True) or {}
+    try:
+        room, token = rooms.join_room(body.get("code"), body.get("name"), body.get("token"))
+    except KeyError as e:
+        return jsonify({"error": e.args[0]}), 404
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify({"code": room.code, "token": token})
+
+
+@app.get("/api/room/poll")
+def api_room_poll():
+    since = int(request.args.get("since", 0) or 0)
+    return room_call(lambda room, token, body: room.view(token, since))
+
+
+def host_only(room, token):
+    if not room.seats[token].host:
+        raise ValueError("Only the host can do that")
+
+
+@app.post("/api/room/start")
+def api_room_start():
+    """Host: start the table, or New game later (chips carry over, anyone at 0 gets 1000)."""
+    def go(room, token, body):
+        host_only(room, token)
+        if room.game is not None and not room.game.hand_over:
+            raise ValueError("Wait for this hand to finish")
+        room.start(body.get("bots"))
+        return {"ok": True}
+    return room_call(go)
+
+
+@app.post("/api/room/next_hand")
+def api_room_next_hand():
+    def go(room, token, body):
+        if room.game is None or not room.game.hand_over:
+            return {"ok": False}
+        return {"ok": room.deal()}
+    return room_call(go)
+
+
+@app.post("/api/room/action")
+def api_room_action():
+    return room_call(lambda room, token, body: room.act(token, body.get("action")) or {"ok": True})
+
+
+@app.post("/api/room/rebuy")
+def api_room_rebuy():
+    return room_call(lambda room, token, body: room.rebuy(token) or {"ok": True})
+
+
+@app.post("/api/room/react")
+def api_room_react():
+    def go(room, token, body):
+        s = room.seats[token]
+        if body.get("emoji") in rooms.REACTIONS and s.player is not None:
+            room.emit(type="react", seat=s.player.seat, emoji=body["emoji"])
+        return {"ok": True}
+    return room_call(go)
+
+
+@app.post("/api/room/leave")
+def api_room_leave():
+    return room_call(lambda room, token, body: room.leave(token) or {"ok": True})
+
+
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5050"))
     print(f"Drex live: {drex_configured()}  ->  http://localhost:{port}")
