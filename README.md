@@ -50,4 +50,10 @@ python app.py           # → http://localhost:5050
 - If it's your turn and you don't act in 45 s, you check (or fold if you'd have to pay).
 - Friends on the same Wi-Fi use `http://<your-computer's-IP>:5050`. For friends elsewhere, put the server online (e.g. a tunnel such as `cloudflared tunnel --url http://localhost:5050`, or a host like Render).
 
+## Put it online (Render)
+`render.yaml` sets everything up: Render → **New → Blueprint** → pick this repo → paste your keys when asked.
+It runs `gunicorn` with **one worker** (rooms live in memory) and protects your API credits with a per-IP
+rate limit and a daily Drex cap (`DREX_DAILY_CAP`; after that the bots use the local brain until midnight UTC).
+On the free plan, saved chips reset when the service restarts; add a disk and set `DATA_DIR` to keep them.
+
 Built with Drex, NDI, Adobe Firefly (bot avatars), Python and Flask.

@@ -1,0 +1,36 @@
+# Render blueprint: https://render.com/docs/blueprint-spec
+# Keys are NOT stored here. Render asks for each `sync: false` value when you create the service,
+# and you can change them later under the service's Environment tab.
+services:
+  - type: web
+    name: drex-poker-arena
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    # ONE worker on purpose: online rooms and single-player tables live in this process's memory.
+    # Threads let many players poll at once.
+    startCommand: gunicorn app:app --workers 1 --threads 16 --timeout 180 --bind 0.0.0.0:$PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.13.1"
+      # ---- your keys (Render prompts for these) ----
+      - key: DREX_API_KEY
+        sync: false
+      - key: NDI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      # ---- spending protection ----
+      - key: DREX_DAILY_CAP          # Drex calls per day (UTC); after that the bots use the local brain
+        value: "3000"
+      - key: LLM_DAILY_CAP           # LLM calls per day for the benchmark's LLM bot
+        value: "100"
+      - key: RATE_LIMIT_PER_MIN      # API requests per minute per visitor IP
+        value: "240"
+      - key: HEAVY_LIMIT_PER_HOUR    # arena / benchmark / evolution / NDI uploads per hour per IP
+        value: "5"
+      - key: MAX_ROOMS
+        value: "30"

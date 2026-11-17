@@ -249,6 +249,39 @@ def drex_configured():
     return bool(DREX_URL and DREX_API_KEY)
 
 
+# ---------- daily spending caps (so a public link can't burn through API credits) ----------
+class DailyCap:
+    """Counts paid API calls per UTC day. Once `limit` is reached, take() returns False until midnight UTC
+    and callers fall back to the local brain (labelled "fallback" in the UI)."""
+
+    def __init__(self, limit):
+        self.limit, self.day, self.used = limit, None, 0
+        self._lock = threading.Lock()
+
+    def take(self):
+        with self._lock:
+            today = time.strftime("%Y-%m-%d", time.gmtime())
+            if today != self.day:
+                self.day, self.used = today, 0
+            if self.limit > 0 and self.used >= self.limit:
+                return False
+            self.used += 1
+            return True
+
+    def status(self):
+        with self._lock:
+            used = self.used if self.day == time.strftime("%Y-%m-%d", time.gmtime()) else 0
+            return {"used_today": used, "daily_cap": self.limit}
+
+
+class BudgetExceeded(RuntimeError):
+    pass
+
+
+DREX_BUDGET = DailyCap(int(os.getenv("DREX_DAILY_CAP", "5000")))  # 0 = no cap
+LLM_BUDGET = DailyCap(int(os.getenv("LLM_DAILY_CAP", "300")))
+
+
 ACTION_DESCRIPTIONS = {
     "fold": "Fold: give up the hand and lose what is already in the pot",
     "check_call": "Check if nothing to call, otherwise call the current bet",
@@ -272,6 +305,8 @@ def call_drex(text, options, personality=None, extra_questions=None):
     Request:  {"model", "state", "questions": {"move": {"type":"choice","instructions","criteria":{opt: desc}}}}
     Response: {"answers": {"move": {"choice", "probabilities": {opt: p}}}, "usage": {"input_tokens"}}
     """
+    if not DREX_BUDGET.take():
+        raise BudgetExceeded("daily Drex call cap reached; using the local brain until tomorrow (UTC)")
     body = {
         "model": DREX_MODEL,
         "state": text,
@@ -416,6 +451,8 @@ def llm_configured():
 
 def call_llm(text, legal):
     """Ask a frontier LLM for the move. Returns (raw_text, in_tokens, out_tokens)."""
+    if not LLM_BUDGET.take():
+        raise BudgetExceeded("daily LLM call cap reached")
     prompt = (text + "\n\nChoose your action. Reply with EXACTLY one of these words and nothing else: "
               + ", ".join(legal))
     if ANTHROPIC_API_KEY:
@@ -508,6 +545,8 @@ def commentate(decisions, result, human=None):
     try:
         if not drex_configured():
             raise RuntimeError("no drex")
+        if not DREX_BUDGET.take():
+            raise BudgetExceeded("daily Drex call cap reached")
         questions = {
             "highlight": {"type": "choice", "instructions": "As a TV poker commentator, which moment was the highlight of this hand?",
                           "criteria": criteria if len(criteria) >= 2 else {**criteria, "none": "Nothing notable"}},

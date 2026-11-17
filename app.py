@@ -4,12 +4,14 @@ Run:  python app.py   then open http://localhost:5050
 """
 import json
 import os
-from concurrent.futures import ThreadPoolExecutor
 import random
 import re
+import secrets
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, g as flask_g, jsonify, request, send_from_directory
 
 # load .env (no extra dependency) before brain.py reads the env vars
 _env = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
@@ -23,7 +25,8 @@ if os.path.exists(_env):
                 os.environ.setdefault(_k.strip(), _v)
 
 from brain import commentate  # noqa: E402
-from brain import (DREX_COST_PER_CALL, DREX_PRICE_PER_M_INPUT, LLM_MODEL, LLM_PRICE_IN, LLM_PRICE_OUT,
+from brain import (DREX_BUDGET, DREX_COST_PER_CALL, DREX_PRICE_PER_M_INPUT, LLM_BUDGET, LLM_MODEL,
+                   LLM_PRICE_IN, LLM_PRICE_OUT,
                    PERSONALITIES, Brain, drex_configured, llm_configured,
                    win_chance)
 from engine import ACTIONS, RAISE_ACTIONS, Game, Player, cards_str
@@ -32,10 +35,123 @@ from ndi import ndi_configured, ndi_extract_players, players_to_stats
 app = Flask(__name__, static_folder="static", static_url_path="/static")
 
 BRAIN = Brain()
-GAME = None
-PLAY_GAME = None  # your real game: chips carry over hand to hand until you bust or win it all
-MODE = "play"
-NDI_STATS = {}  # name -> stats pulled from an uploaded hand history
+HERE = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.getenv("DATA_DIR") or HERE  # where saves go (point it at a persistent disk on a host)
+
+
+# ---------------- per-IP rate limits (public link protection) ----------------
+RATE_PER_MIN = int(os.getenv("RATE_LIMIT_PER_MIN", "240"))       # all API calls; an online player polls ~70/min
+HEAVY_PER_HOUR = int(os.getenv("HEAVY_LIMIT_PER_HOUR", "10"))    # arena / benchmark / evolution / NDI upload
+ROOMS_PER_HOUR = int(os.getenv("ROOM_CREATE_LIMIT_PER_HOUR", "20"))
+HEAVY_PATHS = {"/api/simulate", "/api/benchmark", "/api/evolve", "/api/upload_history"}
+_hits = {}
+_hits_lock = threading.Lock()
+
+
+def client_ip():
+    # Behind Render's proxy the visitor's address is the first X-Forwarded-For entry.
+    fwd = request.headers.get("X-Forwarded-For", "")
+    return fwd.split(",")[0].strip() or request.remote_addr or "?"
+
+
+@app.before_request
+def rate_limit():
+    if not request.path.startswith("/api/") or request.path == "/api/health":
+        return None
+    rules = [("all", RATE_PER_MIN, 60)]
+    if request.path in HEAVY_PATHS:
+        rules.append(("heavy", HEAVY_PER_HOUR, 3600))
+    if request.path == "/api/room/create":
+        rules.append(("rooms", ROOMS_PER_HOUR, 3600))
+    ip, now = client_ip(), time.time()
+    with _hits_lock:
+        if len(_hits) > 20000:  # forget idle addresses
+            for k in [k for k, q in _hits.items() if not q or q[-1] < now - 3600]:
+                del _hits[k]
+        for bucket, limit, window in rules:
+            if limit <= 0:
+                continue
+            q = _hits.setdefault((ip, bucket), [])
+            q[:] = [t for t in q if t > now - window]
+            if len(q) >= limit:
+                wait = int(q[0] + window - now) + 1
+                msg = ("Too many requests, slow down a little." if bucket == "all" else
+                       f"That's the limit for now ({limit} per hour). Try again in {wait // 60 + 1} min.")
+                resp = jsonify({"error": msg})
+                resp.status_code = 429
+                resp.headers["Retry-After"] = str(wait)
+                return resp
+            q.append(now)
+    return None
+
+
+# ---------------- one single-player table per visitor ----------------
+# Each browser gets a "visitor" cookie, so on a public link every visitor has their own game,
+# saved chips and profile instead of everyone sharing one table.
+class Visitor:
+    def __init__(self, vid):
+        self.vid = vid
+        self.game = None        # the table on screen (your game, a demo hand, or bots-only)
+        self.play_game = None   # your real game: chips carry over until you bust or win it all
+        self.mode = "play"
+        self.ndi_stats = {}     # name -> stats pulled from an uploaded hand history
+        self.seen = time.time()
+
+
+VISITORS = {}
+_visitors_lock = threading.Lock()
+MAX_VISITORS = int(os.getenv("MAX_VISITORS", "500"))
+SAVE_DIR = os.path.join(DATA_DIR, "saves")
+_VID_OK = re.compile(r"^[A-Za-z0-9_-]{16,64}$")
+
+
+def V():
+    """The visitor making this request (created on first visit)."""
+    if "visitor" in flask_g:
+        return flask_g.visitor
+    vid = request.cookies.get("visitor", "")
+    if not _VID_OK.match(vid):
+        vid = secrets.token_urlsafe(18)
+        flask_g.new_vid = vid
+    with _visitors_lock:
+        v = VISITORS.get(vid)
+        if v is None:
+            if len(VISITORS) >= MAX_VISITORS:  # forget the visitor idle the longest (their chips are on disk)
+                del VISITORS[min(VISITORS, key=lambda k: VISITORS[k].seen)]
+            v = VISITORS[vid] = Visitor(vid)
+        v.seen = time.time()
+    flask_g.visitor = v
+    return v
+
+
+def _save_path(v):
+    return os.path.join(SAVE_DIR, f"{v.vid}.json")
+
+
+def load_save(v):
+    """{"profile": ..., "bankroll": ...} for this visitor. A first visit on this computer picks up
+    the files the single-player version used before (you_profile.json, bankroll.json)."""
+    try:
+        return json.load(open(_save_path(v)))
+    except Exception:
+        pass
+    legacy = {}
+    for key, name in (("profile", "you_profile.json"), ("bankroll", "bankroll.json")):
+        try:
+            legacy[key] = json.load(open(os.path.join(HERE, name)))
+        except Exception:
+            pass
+    return legacy
+
+
+def write_save(v, **parts):
+    data = load_save(v)
+    data.update(parts)
+    try:
+        os.makedirs(SAVE_DIR, exist_ok=True)
+        json.dump(data, open(_save_path(v), "w"))
+    except Exception:
+        pass
 
 
 def brain_for(personality):
@@ -59,11 +175,11 @@ def new_game(bots, human=True, seed=None):
     return g
 
 
-def carried_chips(g):
+def carried_chips(g, v):
     """Chips each player walks away with (personality -> chips). Chips still in an
     unfinished pot go back to whoever put them in. Busted players rebuy at 1000."""
     if g is None:
-        return load_bankroll()  # server restarted: pick up the chips saved on disk
+        return load_bankroll(v)  # server restarted: pick up the chips saved on disk
     out = {}
     for p in g.players:
         chips = p.chips + (0 if g.hand_over else p.contrib)
@@ -81,11 +197,11 @@ def play_over(g):
     return humans[0].chips <= 0 or all(p.chips <= 0 for p in g.players if not p.human)
 
 
-def play_in_progress():
-    return PLAY_GAME is not None and not play_over(PLAY_GAME)
+def play_in_progress(v):
+    return v.play_game is not None and not play_over(v.play_game)
 
 
-def serialize(g):
+def serialize(g, v):
     over = g.hand_over
     shown = (g.result or {}).get("hands", {}) if over else {}
     players = []
@@ -101,14 +217,14 @@ def serialize(g):
             "hole": hole, "has_cards": bool(p.hole) and not p.folded,
         })
     return {
-        "mode": MODE, "hand_no": g.hand_no, "street": g.street, "board": cards_str(g.board),
+        "mode": v.mode, "hand_no": g.hand_no, "street": g.street, "board": cards_str(g.board),
         "pot": g.pot if not over else 0, "to_act": g.to_act if not over else None,
         "dealer": g.dealer, "hand_over": over, "result": g.result, "players": players,
         "drex_live": drex_configured(),
-        "game_over": play_over(g) if g is PLAY_GAME else False,
+        "game_over": play_over(g) if g is v.play_game else False,
         # your real game is still running but you're looking at another table (watch / demo)
-        "can_resume": g is not PLAY_GAME and play_in_progress(),
-        "game_winner": game_winner(g) if g is PLAY_GAME and play_over(g) else None,
+        "can_resume": g is not v.play_game and play_in_progress(v),
+        "game_winner": game_winner(g) if g is v.play_game and play_over(g) else None,
     }
 
 
@@ -122,74 +238,57 @@ def game_winner(g):
 
 
 # ---------------- 🧠 the bots remember you ----------------
-PROFILE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "you_profile.json")
+def load_profile(v):
+    return load_save(v).get("profile") or {"hands": 0, "actions": 0, "raises": 0, "folds": 0,
+                                           "showdowns": 0, "bluffs": 0, "recent": []}
 
 
-def load_profile():
-    try:
-        return json.load(open(PROFILE_FILE))
-    except Exception:
-        return {"hands": 0, "actions": 0, "raises": 0, "folds": 0, "showdowns": 0, "bluffs": 0, "recent": []}
-
-
-def human_summary(g):
+def human_summary(g, v):
     hs = [p for p in g.players if p.human]
     if not hs:
         return None
     d = g.tracker.export(hs[0].seat)
     acts = d["actions"] or 0
-    prof = load_profile()
+    prof = load_profile(v)
     return {"hands": prof.get("hands", 0), "actions": acts, "raises": d["raises"], "folds": d["folds"],
             "raise_rate": d["raises"] / acts if acts else 0, "fold_rate": d["folds"] / acts if acts else 0,
             "showdowns": d["showdowns"], "bluffs": d["bluffs"], "recent": d["recent"],
             "style": prof.get("style")}
 
 
-def save_profile(g, style=None):
+def save_profile(g, v, style=None):
     hs = [p for p in g.players if p.human]
     if not hs or hs[0].out:
         return
     d = g.tracker.export(hs[0].seat)
-    prof = load_profile()
+    prof = load_profile(v)
     d["hands"] = prof.get("hands", 0) + 1
     d["style"] = style or prof.get("style")
-    try:
-        json.dump(d, open(PROFILE_FILE, "w"))
-    except Exception:
-        pass
+    write_save(v, profile=d)
 
 
-BANKROLL_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bankroll.json")
+def load_bankroll(v):
+    return load_save(v).get("bankroll") or {}
 
 
-def load_bankroll():
-    try:
-        return json.load(open(BANKROLL_FILE))
-    except Exception:
-        return {}
+def save_bankroll(g, v):
+    write_save(v, bankroll=carried_chips(g, v))
 
 
-def save_bankroll(g):
-    try:
-        json.dump(carried_chips(g), open(BANKROLL_FILE, "w"))
-    except Exception:
-        pass
-
-
-def after_hand(g):
+def after_hand(g, v):
     """Once per finished hand: Drex commentary + update your saved profile."""
     if getattr(g, "_done_hand", None) == g.hand_no:
         return
     g._done_hand = g.hand_no
-    if g is PLAY_GAME:
-        save_bankroll(g)
-    hum = human_summary(g)
+    if g is v.play_game:
+        save_bankroll(g, v)
+    hum = human_summary(g, v)
     try:
         g.commentary = commentate(g.decisions, g.result, hum)
     except Exception:
         g.commentary = None
     style = (g.commentary or {}).get("human_style")
-    save_profile(g, style)
+    save_profile(g, v, style)
 
 
 def coach_for(g, p):
@@ -211,12 +310,13 @@ def teach_note(c):
 
 
 def respond(extra=None):
-    g = GAME
-    out = {"state": serialize(g), "events": g.pop_events()}
+    v = V()
+    g = v.game
+    out = {"state": serialize(g, v), "events": g.pop_events()}
     if not g.hand_over and g.to_act is not None and g.players[g.to_act].human:
         out["coach"] = coach_for(g, g.players[g.to_act])
     if g.hand_over:
-        after_hand(g)
+        after_hand(g, v)
         out["commentary"] = getattr(g, "commentary", None)
         out["peek"] = {
             "decisions": g.decisions,
@@ -224,7 +324,7 @@ def respond(extra=None):
             "timeline": g.hand_log, "hand_no": g.hand_no,
         }
     if any(p.human for p in g.players):
-        out["profile"] = human_summary(g)
+        out["profile"] = human_summary(g, v)
     if extra:
         out.update(extra)
     return jsonify(out)
@@ -235,12 +335,22 @@ def no_cache(resp):
     # always serve the latest UI (VS Code's browser caches aggressively)
     if request.path == "/" or request.path.startswith("/static/index"):
         resp.headers["Cache-Control"] = "no-store, max-age=0"
+    if "new_vid" in flask_g:  # first visit: remember this browser
+        resp.set_cookie("visitor", flask_g.new_vid, max_age=365 * 24 * 3600, httponly=True, samesite="Lax",
+                        secure=request.is_secure or request.headers.get("X-Forwarded-Proto") == "https")
     return resp
 
 
 @app.route("/")
 def index():
     return send_from_directory("static", "index.html")
+
+
+@app.get("/api/health")
+def api_health():
+    """For the host's health check. Shows today's paid-call usage, never keys."""
+    return jsonify({"ok": True, "drex_live": drex_configured(), "drex": DREX_BUDGET.status(),
+                    "llm": LLM_BUDGET.status(), "rooms": len(rooms.ROOMS)})
 
 
 @app.get("/api/personalities")
@@ -251,58 +361,57 @@ def personalities():
 
 @app.post("/api/new_game")
 def api_new_game():
-    global GAME, PLAY_GAME, MODE
+    v = V()
     body = request.get_json(silent=True) or {}
-    MODE = body.get("mode", "play")
-    if MODE == "watch":
+    v.mode = body.get("mode", "play")
+    if v.mode == "watch":
         bots = body.get("bots") or ["risk_taker", "conservative", "statistician", "manipulator", "wildcard"]
-        GAME = new_game(bots, human=False)
-    elif play_in_progress() and not body.get("restart"):
+        v.game = new_game([b for b in bots if b in PERSONALITIES][:6], human=False)
+    elif play_in_progress(v) and not body.get("restart"):
         # your game isn't finished: go back to it with your chips instead of resetting to 1000
-        GAME = PLAY_GAME
+        v.game = v.play_game
         return respond({"resumed": True})
     else:
-        bots = body.get("bots") or ["risk_taker", "manipulator", "statistician"]
-        carry = carried_chips(PLAY_GAME)  # keep what you won or lost
-        GAME = PLAY_GAME = new_game(bots[:5], human=True)
-        for p in GAME.players:
+        bots = [b for b in (body.get("bots") or ["risk_taker", "manipulator", "statistician"]) if b in PERSONALITIES]
+        carry = carried_chips(v.play_game, v)  # keep what you won or lost
+        v.game = v.play_game = new_game(bots[:5] or ["statistician"], human=True)
+        for p in v.game.players:
             p.chips = carry.get(p.personality, 1000)
-    apply_ndi(GAME)
-    if MODE != "watch":
-        GAME.tracker.load(0, load_profile())  # the bots remember you
-    GAME.start_hand()
-    GAME.run_bots()
+    apply_ndi(v.game, v.ndi_stats)
+    if v.mode != "watch":
+        v.game.tracker.load(0, load_profile(v))  # the bots remember you
+    v.game.start_hand()
+    v.game.run_bots()
     return respond()
 
 
 @app.post("/api/reset_profile")
 def api_reset_profile():
-    try:
-        os.remove(PROFILE_FILE)
-    except Exception:
-        pass
-    if GAME is not None and any(p.human for p in GAME.players):
-        GAME.tracker.load(0, load_profile())
+    v = V()
+    write_save(v, profile=None)
+    if v.game is not None and any(p.human for p in v.game.players):
+        v.game.tracker.load(0, load_profile(v))
     return jsonify({"ok": True})
 
 
 @app.post("/api/next_hand")
 def api_next_hand():
-    if GAME is None:
+    v = V()
+    if v.game is None:
         return jsonify({"error": "no game"}), 400
-    if not GAME.hand_over:
+    if not v.game.hand_over:
         return respond()
-    if GAME is PLAY_GAME and play_over(GAME):
+    if v.game is v.play_game and play_over(v.game):
         return respond({"game_over": True})
-    if not GAME.start_hand():
+    if not v.game.start_hand():
         return respond({"game_over": True})
-    GAME.run_bots()
+    v.game.run_bots()
     return respond()
 
 
 @app.post("/api/action")
 def api_action():
-    g = GAME
+    g = V().game
     body = request.get_json(silent=True) or {}
     action = body.get("action")
     if g is None or g.hand_over:
@@ -327,7 +436,7 @@ def api_action():
 
 @app.get("/api/state")
 def api_state():
-    if GAME is None:
+    if V().game is None:
         return jsonify({"state": None})
     return respond()
 
@@ -336,14 +445,13 @@ def api_state():
 def api_demo_hand():
     """Rigged DEAL (not rigged decisions): the Manipulator gets 8-3 offsuit and the
     Conservative has a history of folding. Drex decides whether to bluff and whether to fold."""
-    global GAME, MODE
-    MODE = "play"
-    GAME = new_game(["conservative", "manipulator", "statistician"], human=True, seed=7)
-    g = GAME
+    v = V()
+    v.mode = "play"
+    v.game = g = new_game(["conservative", "manipulator", "statistician"], human=True, seed=7)
     con = next(p for p in g.players if p.personality == "conservative")
     # the Conservative has folded 5 of its last 6 actions -> a tight player who folds to pressure
     g.tracker.seed(con.seat, ["fold", "fold", "check_call", "fold", "fold", "fold"], showdowns=1, bluffs=0)
-    apply_ndi(g)
+    apply_ndi(g, v.ndi_stats)
     g.dealer = 2  # rotates to seat 3 -> You SB, Conservative BB, Manipulator first to act
     rig = {"holes": {0: ["Qh", "4c"], 1: ["7s", "2h"], 2: ["8c", "3d"], 3: ["9d", "5c"]},
            "board": ["Ks", "Jd", "6h", "Tc", "2c"]}
@@ -353,7 +461,7 @@ def api_demo_hand():
 
 
 # ---------------- Arena: simulate & benchmark ----------------
-def _run_table(bots, hands, mc_runs):
+def _run_table(bots, hands, mc_runs, ndi=None):
     """One table playing `hands` hands. Busted bots rebuy 1000 (counted as -1000)."""
     brain = Brain(mc_runs=mc_runs)
     players = []
@@ -369,7 +477,7 @@ def _run_table(bots, hands, mc_runs):
         if dup:
             p.name = f"{p.name} #{dup + 1}"
     g = Game(players, decide_fn=brain.decide, rng=random.Random())
-    apply_ndi(g)
+    apply_ndi(g, ndi)
     rebuys = [0] * len(players)
     wins = [0] * len(players)
     per = [{"decisions": 0, "ms": 0.0, "illegal": 0, "mistakes": 0} for _ in players]
@@ -394,7 +502,7 @@ def _run_table(bots, hands, mc_runs):
     return players, nets, rebuys, wins, per, brain.stats
 
 
-def run_sim(bots, hands, mc_runs=120, tables=None):
+def run_sim(bots, hands, mc_runs=120, tables=None, ndi=None):
     """Split `hands` across parallel tables (Drex calls are network-bound), then merge."""
     if tables is None:
         tables = max(1, min(int(os.getenv("ARENA_TABLES", "6")), hands))
@@ -402,7 +510,7 @@ def run_sim(bots, hands, mc_runs=120, tables=None):
     chunks = [base + (1 if i < extra else 0) for i in range(tables)]
     t0 = time.perf_counter()
     with ThreadPoolExecutor(max_workers=tables) as ex:
-        results = list(ex.map(lambda h: _run_table(bots, h, mc_runs), [c for c in chunks if c > 0]))
+        results = list(ex.map(lambda h: _run_table(bots, h, mc_runs, ndi), [c for c in chunks if c > 0]))
     total_s = time.perf_counter() - t0
     players = results[0][0]
     n = len(players)
@@ -459,7 +567,7 @@ def api_simulate():
     body = request.get_json(silent=True) or {}
     hands = max(1, min(int(body.get("hands", 100)), 1000))
     bots = body.get("bots") or ["risk_taker", "conservative", "statistician", "manipulator", "wildcard"]
-    rows, stats, secs = run_sim(bots, hands)
+    rows, stats, secs = run_sim(bots, hands, ndi=V().ndi_stats)
     return jsonify(save_result("arena", {"leaderboard": rows, "hands": hands, "seconds": round(secs, 2),
                                          "drex_live": drex_configured()}))
 
@@ -472,7 +580,7 @@ def api_benchmark():
     with_llm = llm_configured() and body.get("llm", True)
     seats = ["statistician", "rule_based", "llm_bot"] if with_llm else \
         ["statistician", "rule_based", "statistician", "rule_based"]
-    rows, stats, secs = run_sim(seats, hands)
+    rows, stats, secs = run_sim(seats, hands, ndi=V().ndi_stats)
     out = {}
     kinds = [("drex", "Drex bot"), ("rule", "Rule-based bot")] + ([("llm", f"LLM bot ({LLM_MODEL})")] if with_llm else [])
     for kind, label in kinds:
@@ -541,6 +649,7 @@ def api_evolve():
     body = request.get_json(silent=True) or {}
     gens = max(2, min(int(body.get("generations", 6)), 15))
     hands = max(2, min(int(body.get("hands_per_gen", 8)), 60))
+    ndi = V().ndi_stats
     rng = random.Random()
     pop = []
     for i, pers in enumerate(["risk_taker", "conservative", "statistician", "manipulator", "wildcard"]):
@@ -549,7 +658,7 @@ def api_evolve():
     history, graveyard = [], []
     t0 = time.perf_counter()
     for gen in range(1, gens + 1):
-        rows, stats, secs = run_sim(pop, hands)
+        rows, stats, secs = run_sim(pop, hands, ndi=ndi)
         by_name = {r["name"]: r for r in rows}
         ranked = sorted(pop, key=lambda ag: by_name[ag["name"]]["net"], reverse=True)
         snap = [{"id": ag["id"], "name": ag["name"], "personality": ag["personality"], "lineage": ag["lineage"],
@@ -610,12 +719,12 @@ def parse_hand_history(text):
             for n, c in counts.items() if c["actions"] >= 2}
 
 
-def apply_ndi(g):
+def apply_ndi(g, stats):
     """Feed uploaded stats into the tracker so every bot's Drex state (esp. the Manipulator's) uses them."""
-    if not NDI_STATS:
+    if not stats:
         return
     for p in g.players:
-        st = NDI_STATS.get(p.name)
+        st = stats.get(p.name)
         if st:
             n = 6
             raises = round(st["raise_rate"] * n)
@@ -626,7 +735,7 @@ def apply_ndi(g):
 
 @app.post("/api/upload_history")
 def api_upload_history():
-    global NDI_STATS
+    v = V()
     f = request.files.get("file")
     raw = f.read() if f else (request.get_json(silent=True) or {}).get("text", "").encode()
     fname = f.filename if f else "hand_history.txt"
@@ -635,16 +744,16 @@ def api_upload_history():
     if ndi_configured():
         try:
             players, job_id = ndi_extract_players(raw, fname)
-            NDI_STATS = players_to_stats(players)
+            v.ndi_stats = players_to_stats(players)
             source = "NDI"
         except Exception as e:
             error = str(e)[:200]
-            NDI_STATS = parse_hand_history(raw.decode("utf-8", "ignore"))
+            v.ndi_stats = parse_hand_history(raw.decode("utf-8", "ignore"))
     else:
-        NDI_STATS = parse_hand_history(raw.decode("utf-8", "ignore"))
-    if GAME is not None:
-        apply_ndi(GAME)
-    return jsonify({"stats": NDI_STATS, "source": source, "job_id": job_id, "error": error,
+        v.ndi_stats = parse_hand_history(raw.decode("utf-8", "ignore"))
+    if v.game is not None:
+        apply_ndi(v.game, v.ndi_stats)
+    return jsonify({"stats": v.ndi_stats, "source": source, "job_id": job_id, "error": error,
                     "seconds": round(time.perf_counter() - t0, 1)})
 
 
@@ -671,7 +780,10 @@ def room_call(fn):
 @app.post("/api/room/create")
 def api_room_create():
     body = request.get_json(silent=True) or {}
-    room, token = rooms.create_room(body.get("name"), body.get("bots") or ["statistician", "manipulator"])
+    try:
+        room, token = rooms.create_room(body.get("name"), body.get("bots") or ["statistician", "manipulator"])
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 503
     return jsonify({"code": room.code, "token": token})
 
 

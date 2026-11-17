@@ -30,7 +30,8 @@ CODE_LETTERS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no 0/O or 1/I mix-ups
 REACTIONS = {"😂", "😱", "🔥", "👀", "🤡", "😎", "👏", "😭"}
 BOT_KINDS = ["risk_taker", "conservative", "statistician", "manipulator", "wildcard"]
 
-CHIPS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "online_chips.json")
+MAX_ROOMS = int(os.getenv("MAX_ROOMS", "50"))  # each room has a background thread; cap them on a public host
+CHIPS_FILE = os.path.join(os.getenv("DATA_DIR") or os.path.dirname(os.path.abspath(__file__)), "online_chips.json")
 _chips_lock = threading.Lock()
 
 
@@ -398,6 +399,8 @@ def create_room(name, bots):
     with _rooms_lock:
         for c in [c for c, r in ROOMS.items() if not r.alive]:
             del ROOMS[c]
+        if len(ROOMS) >= MAX_ROOMS:
+            raise ValueError("The server is full right now. Try again in a few minutes.")
         code = new_code()
         room = Room(code, name, bots)
         ROOMS[code] = room
